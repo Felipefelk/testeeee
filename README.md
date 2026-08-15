@@ -1,88 +1,59 @@
-# Animaca Geek Facebook Agent v0.2
+# Animaca Geek Facebook Agent v0.3 — Netlify Free
 
-Agente próprio para planejar, revisar, agendar e publicar conteúdo em uma Página do Facebook via Meta Graph API, sem n8n.
+Versão serverless do agente de postagem da Animaca Geek, adaptada para rodar no Netlify sem servidor contínuo.
 
-## O que mudou na v0.2
+## Arquitetura
 
-1. **Idempotência e bloqueio de publicação** — estados `approved → publishing → published`; chamadas concorrentes não assumem o mesmo post. Falha de rede com resultado incerto vira `needs_review` para evitar retry cego e postagem duplicada.
-2. **SQLite** — o JSON deixou de ser o banco principal. SQLite usa WAL, transações e `PRAGMA integrity_check`.
-3. **Proteção contra perda silenciosa** — se existir `data/db.json` legado e ele estiver corrompido, o servidor para e preserva o arquivo. Se estiver válido, importa uma vez para SQLite e cria backup `.bak`.
-4. **Validação real da Meta** — o painel consulta a Graph API e verifica se o Page Access Token responde pela mesma Página configurada. `META_USER_ACCESS_TOKEN` é opcional para conferir `tasks` como `CREATE_CONTENT` sem publicar.
-5. **Autenticação e uploads reforçados** — login gera cookie HttpOnly; senha não viaja em URL/header a cada requisição; limite de tentativas; imagens são verificadas pelo conteúdo real, reprocessadas para WEBP e servidas por rota autenticada.
-6. **Timezone/agendamento** — o painel recebe horário local de `America/Sao_Paulo`, converte para UTC antes de salvar e reconverte para exibição.
-7. **Calendário visual** — posts agendados aparecem agrupados por dia e horário.
-8. **Planner** — escolhe produtos priorizando os menos/recentemente divulgados, cria três tipos de conteúdo e agenda os slots configurados como rascunhos para aprovação.
+- **Frontend:** arquivos estáticos em `public/`
+- **API:** Netlify Functions em `netlify/functions/`
+- **Dados:** Netlify Blobs (`animaca-products`, `animaca-posts`, `animaca-system`)
+- **Imagens:** Netlify Blobs (`animaca-media`)
+- **Agendamento:** Scheduled Function a cada 15 minutos
+- **IA:** OpenAI API opcional para Planner/legendas
+- **Publicação:** Meta Graph API
 
-## Requisitos
+Não usa SQLite, Express, n8n, Railway nem servidor 24h.
 
-- Node.js 20+
-- Uma Página do Facebook gerenciada por você
-- App Meta configurado com permissões adequadas à publicação em Página
-- Page Access Token
-- Chave da OpenAI para geração automática de legendas/Planner
+## Variáveis no Netlify
 
-## Instalação
-
-```bash
-npm install
-cp .env.example .env
-```
-
-Edite `.env` e depois:
-
-```bash
-npm start
-```
-
-Abra `http://localhost:3000`.
-
-## Configuração principal
+Configure em **Project configuration → Environment variables**:
 
 ```env
-APP_PASSWORD=senha-forte
-SESSION_SECRET=segredo-longo-e-aleatorio
+APP_PASSWORD=uma-senha-forte
+SESSION_SECRET=um-segredo-longo-e-aleatorio
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-5.6
 META_PAGE_ID=...
 META_PAGE_ACCESS_TOKEN=...
-META_USER_ACCESS_TOKEN=... # opcional, somente para validar tasks
+META_USER_ACCESS_TOKEN=... # opcional; usado somente para validar tasks
 META_GRAPH_VERSION=v25.0
 AUTO_PUBLISH=false
 TIMEZONE=America/Sao_Paulo
 PLANNER_SLOTS=10:00,15:00,20:00
 ```
 
-### Segurança
+Durante homologação mantenha `AUTO_PUBLISH=false`.
 
-- Não coloque `.env` no Git.
-- Em produção use HTTPS e `NODE_ENV=production`; o cookie de sessão passa a exigir `Secure`.
-- Mantenha `AUTO_PUBLISH=false` durante a homologação.
-- Não publique novamente um post em `needs_review` sem conferir primeiro a Página do Facebook.
+## Deploy no Netlify
 
-## Fluxo recomendado
+1. **Add new project → Import an existing project**.
+2. Escolha GitHub e o repositório `Felipefelk/testeeee`.
+3. O `netlify.toml` já informa a pasta pública e a pasta de Functions.
+4. Adicione as variáveis acima.
+5. Faça o deploy.
+6. Entre no painel pela URL do Netlify.
+7. Cadastre um produto e valide a persistência após um novo deploy.
+8. Configure Meta e faça **uma postagem manual de teste**.
+9. Só depois ative `AUTO_PUBLISH=true`.
 
-1. Cadastre produtos e imagens.
-2. Clique em **Criar plano do dia**.
-3. Revise texto, imagem e horário no calendário.
-4. Aprove cada post.
-5. Teste uma publicação manual real.
-6. Depois de validar o fluxo, ative `AUTO_PUBLISH=true`.
+## Segurança e anti-duplicação
 
-## Estados de postagem
+Posts ficam em blobs individuais e a transição de publicação usa ETag/`onlyIfMatch`, de forma que duas Functions concorrentes não devem assumir o mesmo post. Uma falha de rede de resultado incerto muda o post para `needs_review`, impedindo retry automático cego.
 
-- `draft`: rascunho editável.
-- `approved`: pronto para publicação.
-- `publishing`: bloqueado enquanto a Meta é chamada.
-- `published`: publicado com sucesso.
-- `error`: a Meta rejeitou claramente a chamada; pode ser revisado e aprovado novamente.
-- `needs_review`: houve falha de rede/resultado ambíguo; conferir a Página antes de qualquer nova tentativa.
-- `cancelled`: cancelado.
+## Agendamento
 
-## Migração do MVP anterior
+Netlify executa Scheduled Functions em UTC. O scheduler roda a cada 15 minutos e os posts são armazenados como timestamps UTC. O painel converte de/para `America/Sao_Paulo`.
 
-Se `data/db.json` existir:
+## Observação de custo
 
-- JSON válido: importa produtos/posts para SQLite uma única vez e cria um backup do JSON.
-- JSON inválido: **não cria banco vazio nem sobrescreve o arquivo**; o servidor encerra com erro explícito.
-
-O banco atual fica em `data/animaca.sqlite`.
+A hospedagem pode operar no plano Free dentro dos créditos mensais do Netlify. A OpenAI API e eventuais custos/limites da Meta são serviços separados do Netlify.
