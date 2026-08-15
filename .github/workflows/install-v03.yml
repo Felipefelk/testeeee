@@ -17,23 +17,26 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
       - name: Configurar Node
         uses: actions/setup-node@v5
         with:
           node-version: '22.14.0'
-
-      - name: Reconstruir e validar pacote
+      - name: Validar partes e pacote
         shell: bash
         run: |
           set -euo pipefail
+          sha256sum .deploy-v03/part*.b64
+          echo '004ba6a619b2a74db694df828e8938655716833108a5db8577c16c2523449d70  .deploy-v03/part00.b64' | sha256sum -c -
+          echo 'd8ff43747853087ddaacf2e1a10e61c3d229ba30226b8ae23776bc0b90d924d6  .deploy-v03/part01.b64' | sha256sum -c -
+          echo 'bf52af4069773b157148534ee9a5c948b3654a29407d0859e008e5bef46ef48e  .deploy-v03/part02.b64' | sha256sum -c -
+          echo 'b43400937f8e54976a6bcdbde3d4e3c265682098a4a66ddb199376e60635bc63  .deploy-v03/part03.b64' | sha256sum -c -
+          echo '4cd87f1ca8a1d799147fd796f9886a4a8046b646b237843056b52dfa993ec173  .deploy-v03/part04.b64' | sha256sum -c -
           cat .deploy-v03/part*.b64 > /tmp/animaca-v03.b64
           base64 --decode /tmp/animaca-v03.b64 > /tmp/animaca-v03.tgz
           echo '6f6419e5e9991405a090fa6ab9e1e6809940b3bd399352b8dd56687af4be5175  /tmp/animaca-v03.tgz' | sha256sum -c -
           tar -tzf /tmp/animaca-v03.tgz >/dev/null
           rm -rf /tmp/animaca-facebook-agent-v0.3
           tar -xzf /tmp/animaca-v03.tgz -C /tmp
-
       - name: Instalar v0.3 serverless
         shell: bash
         run: |
@@ -42,14 +45,12 @@ jobs:
           cp -a /tmp/animaca-facebook-agent-v0.3/. .
           rm -rf .deploy-v03
           rm -f .github/workflows/install-v03.yml
-
       - name: Travar dependencias e validar
         shell: bash
         run: |
           set -euo pipefail
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm run check
-
       - name: Salvar v0.3
         shell: bash
         run: |
