@@ -1,0 +1,24 @@
+{
+  "name": "animaca-facebook-agent",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "engines": {"node": ">=20"},
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "file-type": "^21.0.0",
+    "luxon": "^3.7.1",
+    "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
+    "openai": "^5.22.0",
+    "sharp": "^0.34.3",
+    "uuid": "^11.1.0"
+  }
+}

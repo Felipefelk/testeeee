@@ -1,0 +1,8 @@
+.env
+node_modules/
+data/animaca.sqlite
+data/animaca.sqlite-*
+data/db.json
+data/*.bak
+uploads/*
+!uploads/.gitkeep
