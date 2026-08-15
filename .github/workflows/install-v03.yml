@@ -25,8 +25,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum .deploy-v03/part*.b64
-          echo '004ba6a619b2a74db694df828e8938655716833108a5db8577c16c2523449d70  .deploy-v03/part00.b64' | sha256sum -c -
+          echo 'df76e07f2fdd742a9bbd6cbd4617d71a2e19f03c6cc4ae08e8dd99a7e4933829  .deploy-v03/part00a.b64' | sha256sum -c -
+          echo '942aae5a712332ed7056f52c3db21b59f4ddbf7016952e4c312d2b581b8b4196  .deploy-v03/part00b.b64' | sha256sum -c -
           echo 'd8ff43747853087ddaacf2e1a10e61c3d229ba30226b8ae23776bc0b90d924d6  .deploy-v03/part01.b64' | sha256sum -c -
           echo 'bf52af4069773b157148534ee9a5c948b3654a29407d0859e008e5bef46ef48e  .deploy-v03/part02.b64' | sha256sum -c -
           echo 'b43400937f8e54976a6bcdbde3d4e3c265682098a4a66ddb199376e60635bc63  .deploy-v03/part03.b64' | sha256sum -c -
