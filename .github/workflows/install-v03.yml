@@ -1,0 +1,60 @@
+name: Instalar Animaca Agent v0.3 Netlify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/install-v03.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  instalar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.14.0'
+
+      - name: Reconstruir e validar pacote
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .deploy-v03/package.b64 > /tmp/animaca-v03.tgz
+          echo '6f6419e5e9991405a090fa6ab9e1e6809940b3bd399352b8dd56687af4be5175  /tmp/animaca-v03.tgz' | sha256sum -c -
+          tar -tzf /tmp/animaca-v03.tgz >/dev/null
+          rm -rf /tmp/animaca-facebook-agent-v0.3
+          tar -xzf /tmp/animaca-v03.tgz -C /tmp
+
+      - name: Instalar v0.3 serverless
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf data uploads netlify server.mjs package-lock.json
+          cp -a /tmp/animaca-facebook-agent-v0.3/. .
+          rm -rf .deploy-v03
+          rm -f .github/workflows/install-v03.yml
+
+      - name: Travar dependencias e validar
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm run check
+
+      - name: Salvar v0.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Converte agente para Netlify Free v0.3'
+          git push origin HEAD:main
