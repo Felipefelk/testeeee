@@ -1,0 +1,50 @@
+name: Finalize Animaca Agent v0.7
+
+on:
+  push:
+    branches: [dev-v0.7]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev-v0.7
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Aplicar hardening pós-auditoria
+        run: python .github/scripts/finalize-v07.py
+      - name: Instalação limpa
+        run: npm ci --no-audit --no-fund
+      - name: Validar sintaxe de todos os módulos
+        run: npm run check
+      - name: Executar suíte completa
+        run: npm test
+      - name: Verificar fail-safe e arquitetura
+        run: |
+          grep -q '^AUTO_PLAN=false$' .env.example
+          grep -q '^AUTO_PUBLISH=false$' .env.example
+          grep -q '^AUTO_APPROVE_PLANNER=false$' .env.example
+          grep -q '^AUTO_SYNC_SHOPEE=false$' .env.example
+          grep -q '^REQUIRE_AI_VISUAL=true$' .env.example
+          grep -q 'gpt-image-2' netlify/lib/creative-ai.mjs
+          grep -q 'background: true' netlify/functions/content-worker.mjs
+          grep -q 'queueShopeeSync' netlify/functions/api.mjs
+          ! grep -q "TIMEZONE=" .env.example
+      - name: Commitar v0.7 final
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Finaliza Animaca Agent v0.7 após auditoria"
+          git push origin dev-v0.7
