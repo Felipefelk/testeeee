@@ -809,7 +809,7 @@ async function claimPlanSlot(date, type) {
 }
 
 export async function prepareDailySlot(type, dateRaw = null) {
-  if (!boolEnv('AUTO_PLAN', true)) return { autoPlan: false, type };
+  if (!boolEnv('AUTO_PLAN', false)) return { autoPlan: false, type };
   const date = String(dateRaw || DateTime.now().setZone(TIMEZONE).toISODate());
   const claim = await claimPlanSlot(date, type);
   if (!claim.claimed) return { type, date, skipped: true, state: claim.slot?.state || 'unknown', postId: claim.slot?.postId || null };
@@ -1050,7 +1050,7 @@ export async function bootstrapSummary() {
   const pending = posts.filter(p => ['draft', 'approved', 'error', 'needs_review'].includes(p.status)).length;
   return {
     status: {
-      openai: Boolean(process.env.OPENAI_API_KEY), autoPlan: boolEnv('AUTO_PLAN', true), autoApprovePlanner: boolEnv('AUTO_APPROVE_PLANNER', false),
+      openai: Boolean(process.env.OPENAI_API_KEY), autoPlan: boolEnv('AUTO_PLAN', false), autoApprovePlanner: boolEnv('AUTO_APPROVE_PLANNER', false),
       autoPublish: boolEnv('AUTO_PUBLISH', false), graphVersion: process.env.META_GRAPH_VERSION || 'v26.0', timezone: TIMEZONE,
       plannerSlots: plannerSlots(), meta,
       shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl).length },

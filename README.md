@@ -38,9 +38,9 @@ Total normal: 10 Scheduled Function runs/dia, contra 96/dia na v0.4. Os horário
 Mantenha:
 
 ```env
-AUTO_PLAN=true
+AUTO_PLAN=false
 AUTO_APPROVE_PLANNER=false
 AUTO_PUBLISH=false
 ```
 
-Depois de alguns dias de revisão, ative primeiro `AUTO_APPROVE_PLANNER=true`. Só depois, se o Quality Gate estiver consistente, ative `AUTO_PUBLISH=true`.
+Para iniciar a preparação automática, defina primeiro `AUTO_PLAN=true`. Depois de alguns dias de revisão, ative `AUTO_APPROVE_PLANNER=true`. Só depois, se o Quality Gate estiver consistente, ative `AUTO_PUBLISH=true`.

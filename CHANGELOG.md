@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.5.0
+- Fail-safe: `AUTO_PLAN` fica desligado se não for explicitamente configurado como `true`.
 - Scheduler dividido em rotinas JIT: 10 execuções/dia em vez de 96.
 - Plano diário idempotente, retry limitado e orçamento de IA.
 - Quality Gate recalculado após edição e antes da publicação.
