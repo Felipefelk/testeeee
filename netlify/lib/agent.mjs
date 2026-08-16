@@ -949,7 +949,7 @@ export async function publishById(id) {
     const now = nowIso();
     const updated = await casPost(id, current => {
       if (current.publishToken !== claim.token) throw new Error('A Meta aceitou o post, mas o estado local mudou. Revisão manual necessária.');
-      return { ...current, status: 'published', publishedAt: now, metaPostId: result.id || result.post_id || null, error: null, errorCode: null, errorSubcode: null, publishToken: null, publishLockAt: null, updatedAt: now };
+      return { ...current, status: 'published', publishedAt: now, metaPostId: result.post_id || result.id || null, error: null, errorCode: null, errorSubcode: null, publishToken: null, publishLockAt: null, updatedAt: now };
     });
     if (claim.post.productId) await casProduct(claim.post.productId, p => ({ ...p, lastPostedAt: now, updatedAt: now })).catch(() => {});
     if (updated.dailyDate && updated.plannerType) await markPlanSlot(updated.dailyDate, updated.plannerType, { state: 'published', postId: updated.id, publishedAt: now });
