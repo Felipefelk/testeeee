@@ -1,7 +1,8 @@
 import {
-  SESSION_COOKIE, TIMEZONE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
-  statusSummary, dataSummary, createProduct, deleteProduct, getProduct, generateCaption, insertPost,
-  patchPost, generatePlan, validateMetaConnection, publishById, getMedia, localToUtc
+  SESSION_COOKIE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
+  statusSummary, dataSummary, createProduct, updateProduct, deleteProduct, getProduct,
+  generateSaleCaption, insertPost, patchPost, generatePlan, syncShopeeCatalog,
+  validateMetaConnection, publishById, getMedia, localToUtc
 } from '../lib/agent.mjs';
 
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers });
@@ -64,14 +65,20 @@ export default async (req, context) => {
     if (route === '/status' && method === 'GET') return json(await statusSummary());
     if (route === '/data' && method === 'GET') return json(await dataSummary());
     if (route === '/meta/validate' && method === 'POST') return json(await validateMetaConnection(true));
+    if (route === '/shopee/sync' && method === 'POST') return json(await syncShopeeCatalog());
 
     if (route === '/products' && method === 'POST') {
       const form = await req.formData();
       const file = form.get('image');
-      return json(await createProduct({ name: form.get('name'), category: form.get('category'), price: form.get('price'), description: form.get('description'), imageUrl: form.get('imageUrl'), file: file instanceof File && file.size ? file : null }));
+      return json(await createProduct({
+        name: form.get('name'), category: form.get('category'), price: form.get('price'),
+        description: form.get('description'), imageUrl: form.get('imageUrl'), shopeeUrl: form.get('shopeeUrl'),
+        file: file instanceof File && file.size ? file : null
+      }));
     }
 
     const productMatch = route.match(/^\/products\/([^/]+)$/);
+    if (productMatch && method === 'PATCH') return json(await updateProduct(productMatch[1], await req.json()));
     if (productMatch && method === 'DELETE') {
       const result = await deleteProduct(productMatch[1]);
       return result ? json(result) : json({ error: 'Produto não encontrado.' }, 404);
@@ -80,13 +87,13 @@ export default async (req, context) => {
     if (route === '/generate' && method === 'POST') {
       const body = await req.json(); const product = await getProduct(body.productId);
       if (!product || !product.active) return json({ error: 'Produto não encontrado.' }, 404);
-      const message = await generateCaption(product, 'product_sale');
-      return json(await insertPost({ product, message, origin: 'manual' }));
+      const message = await generateSaleCaption(product);
+      return json(await insertPost({ product, message, origin: 'manual', plannerType: 'sale' }));
     }
 
     if (route === '/posts' && method === 'POST') {
       const body = await req.json(); const product = body.productId ? await getProduct(body.productId) : null;
-      return json(await insertPost({ product, message: body.message, imageUrl: body.imageUrl || '', scheduledAt: body.scheduledLocal ? localToUtc(body.scheduledLocal) : null, origin: 'manual' }));
+      return json(await insertPost({ product, displayName: body.displayName || '', message: body.message, imageUrl: body.imageUrl || '', scheduledAt: body.scheduledLocal ? localToUtc(body.scheduledLocal) : null, origin: 'manual' }));
     }
 
     const postMatch = route.match(/^\/posts\/([^/]+)$/);

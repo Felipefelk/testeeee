@@ -1,13 +1,14 @@
 # Changelog
 
-## v0.3.0
+## v0.4.0
 
-- Arquitetura convertida de servidor Node contínuo para Netlify serverless.
-- SQLite substituído por registros individuais no Netlify Blobs.
-- Uploads movidos para Netlify Blobs e persistem entre deploys.
-- Concorrência/idempotência preservadas com ETag + `onlyIfMatch`.
-- Express, multer, better-sqlite3 e node-cron removidos.
-- Scheduled Function criada para verificar posts aprovados a cada 15 minutos.
-- Sessão continua stateless e HttpOnly/Secure.
-- Rate limit de login persistido em Blobs.
-- Planner, calendário, validação da Meta e geração via OpenAI preservados.
+- Estratégia diária fixa: venda Shopee + hype atual + crescimento.
+- Campo de link específico da Shopee por produto.
+- Sincronização assistida da loja Shopee via OpenAI web search.
+- Post de venda sempre inclui link exato do produto.
+- Hype usa busca web no momento da criação e evita política, tragédias, boatos e temas sensíveis.
+- Conteúdo de crescimento separado de conteúdo comercial.
+- AUTO_PLAN garante o plano diário via Scheduled Function.
+- AUTO_APPROVE_PLANNER controla se os posts já nascem aprovados.
+- AUTO_PUBLISH permanece independente por segurança.
+- Painel atualizado para mostrar estratégia, sincronização e origem dos produtos.

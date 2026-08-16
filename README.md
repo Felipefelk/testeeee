@@ -1,59 +1,34 @@
-# Animaca Geek Facebook Agent v0.3 — Netlify Free
+# Animaca Geek Facebook Agent v0.4
 
-Versão serverless do agente de postagem da Animaca Geek, adaptada para rodar no Netlify sem servidor contínuo.
+Agente serverless no Netlify para planejar, revisar e publicar conteúdo na Página do Facebook da Animaca Geek.
 
-## Arquitetura
+## Estratégia diária fixa
 
-- **Frontend:** arquivos estáticos em `public/`
-- **API:** Netlify Functions em `netlify/functions/`
-- **Dados:** Netlify Blobs (`animaca-products`, `animaca-posts`, `animaca-system`)
-- **Imagens:** Netlify Blobs (`animaca-media`)
-- **Agendamento:** Scheduled Function a cada 15 minutos
-- **IA:** OpenAI API opcional para Planner/legendas
-- **Publicação:** Meta Graph API
+1. **10h — Venda Shopee:** escolhe um produto ativo menos repetido, cria copy comercial e inclui o link específico do produto na Shopee.
+2. **15h — Hype do momento:** usa a ferramenta de busca web da OpenAI para localizar um assunto geek realmente recente e criar um post de alcance/conversa.
+3. **20h — Crescimento:** cria conteúdo pensado para comentários, compartilhamentos, identificação e novos seguidores.
 
-Não usa SQLite, Express, n8n, Railway nem servidor 24h.
+## Shopee
 
-## Variáveis no Netlify
+- `SHOPEE_STORE_URL` aponta para a loja pública.
+- O painel tem **Sincronizar produtos da Shopee**, que usa web search da OpenAI e só importa itens em que consegue confirmar um URL individual.
+- Produtos também podem ser cadastrados manualmente com foto, preço e link específico.
+- Produtos sincronizados sem foto podem gerar posts de texto; adicione fotos reais aos produtos prioritários quando quiser posts de venda com imagem.
 
-Configure em **Project configuration → Environment variables**:
+## Automação
+
+- `AUTO_PLAN=true`: o scheduler garante o plano do dia automaticamente.
+- `AUTO_APPROVE_PLANNER=false`: os 3 posts nascem como rascunho para revisão.
+- `AUTO_PUBLISH=false`: nada é publicado automaticamente.
+
+Para autonomia total, depois de homologar:
 
 ```env
-APP_PASSWORD=uma-senha-forte
-SESSION_SECRET=um-segredo-longo-e-aleatorio
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-5.6
-META_PAGE_ID=...
-META_PAGE_ACCESS_TOKEN=...
-META_USER_ACCESS_TOKEN=... # opcional; usado somente para validar tasks
-META_GRAPH_VERSION=v25.0
-AUTO_PUBLISH=false
-TIMEZONE=America/Sao_Paulo
-PLANNER_SLOTS=10:00,15:00,20:00
+AUTO_PLAN=true
+AUTO_APPROVE_PLANNER=true
+AUTO_PUBLISH=true
 ```
 
-Durante homologação mantenha `AUTO_PUBLISH=false`.
+## Segurança
 
-## Deploy no Netlify
-
-1. **Add new project → Import an existing project**.
-2. Escolha GitHub e o repositório `Felipefelk/testeeee`.
-3. O `netlify.toml` já informa a pasta pública e a pasta de Functions.
-4. Adicione as variáveis acima.
-5. Faça o deploy.
-6. Entre no painel pela URL do Netlify.
-7. Cadastre um produto e valide a persistência após um novo deploy.
-8. Configure Meta e faça **uma postagem manual de teste**.
-9. Só depois ative `AUTO_PUBLISH=true`.
-
-## Segurança e anti-duplicação
-
-Posts ficam em blobs individuais e a transição de publicação usa ETag/`onlyIfMatch`, de forma que duas Functions concorrentes não devem assumir o mesmo post. Uma falha de rede de resultado incerto muda o post para `needs_review`, impedindo retry automático cego.
-
-## Agendamento
-
-Netlify executa Scheduled Functions em UTC. O scheduler roda a cada 15 minutos e os posts são armazenados como timestamps UTC. O painel converte de/para `America/Sao_Paulo`.
-
-## Observação de custo
-
-A hospedagem pode operar no plano Free dentro dos créditos mensais do Netlify. A OpenAI API e eventuais custos/limites da Meta são serviços separados do Netlify.
+Tokens e chaves ficam somente nas Environment Variables do Netlify. Não versione `.env`.
