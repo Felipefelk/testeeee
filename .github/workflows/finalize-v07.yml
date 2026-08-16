@@ -48,6 +48,27 @@ jobs:
           lines[matches[0]]=replacement
           p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
           PY
+      - name: Alinhar teste de catálogo à fonte não autoritativa
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tests/v07.test.mjs')
+          s=p.read_text(encoding='utf-8')
+          start=s.index("test('produto fica stale por idade ou duas ausências de sync'")
+          end=s.index("test('prepare é dispatcher", start)
+          block="""test('ausência na busca gera atenção; idade vencida bloqueia catálogo', () => {
+            const now = Date.parse('2026-08-16T12:00:00Z');
+            const base = { shopeeUrl: 'https://shopee.com.br/x', verified: true, verifiedAt: '2026-08-15T12:00:00Z' };
+            assert.equal(productFreshnessState(base, now, 14).fresh, true);
+            const missing = productFreshnessState({ ...base, missingSyncCount: 2 }, now, 14);
+            assert.equal(missing.fresh, true);
+            assert.equal(missing.state, 'attention');
+            assert.equal(productFreshnessState({ ...base, verifiedAt: '2026-07-01T12:00:00Z' }, now, 14).fresh, false);
+          });
+
+          """
+          p.write_text(s[:start]+block+s[end:],encoding='utf-8')
+          PY
       - name: Instalação limpa
         run: npm ci --no-audit --no-fund
       - name: Validar sintaxe de todos os módulos
