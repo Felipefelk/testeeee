@@ -33,11 +33,27 @@ jobs:
           echo '59dff8916cfce2335e602fb213ca9e7cb2420b571204150d1dfd43ac07ca0aee  .deploy-v05/part01.b64' | sha256sum -c -
           echo 'f3476855a2f192eece51fc3f32146a7dc84779b4d2ea4daf6b4f14723588c8c4  .deploy-v05/part02.b64' | sha256sum -c -
           echo 'bb72e5642d7f3bf6d84d0bc8bd19109b3071cd3fb165a19cd0d049808fa93ead  .deploy-v05/part03.b64' | sha256sum -c -
-          echo '8b7c2bc5895a49b783f01ff12c0574ac03f20c5ceadc19124056e78f8c587239  .deploy-v05/part04.b64' | sha256sum -c -
+          echo '35bd8af8d9c26a1f10011cb779946d09bd8af0560b392ab9a2bf2c7d234123d0  .deploy-v05/p04_0.b64' | sha256sum -c -
+          echo '04de739e5a4c625998f6c02af9e54295a634f100d51c28dccc94e26663cbdf9c  .deploy-v05/p04_1.b64' | sha256sum -c -
+          echo '4424e05f9da53a2eb89436109a81ccb76a7d5f02d15462a0d2de1912b603f718  .deploy-v05/p04_2.b64' | sha256sum -c -
+          echo 'e87fce130f5cc92bdfddf0ef25894e526c9aecdc142cc9ed965992b403201eea  .deploy-v05/p04_3.b64' | sha256sum -c -
+          echo 'ce1ecb603f800530151cccedad1b77d670e0f239ec1cdec6193d3c32c5fb66b5  .deploy-v05/p04_4.b64' | sha256sum -c -
           echo '4f8fea1da9204037467fc643f154ea2086e117c7fdffd218a3aed8a2cb396394  .deploy-v05/part05.b64' | sha256sum -c -
           echo '7eaf6b44c2bc8ecb256f3150b8fd3a0bff6649b91bd3c672d16e0e62df955443  .deploy-v05/part06.b64' | sha256sum -c -
           echo 'aa51c2e050b6a649435ae1eb5c6c5367228e13110e818e9706cd80d76e49c7d4  .deploy-v05/part07.b64' | sha256sum -c -
-          cat .deploy-v05/part*.b64 > /tmp/animaca-v05.b64
+          cat \
+            .deploy-v05/part00.b64 \
+            .deploy-v05/part01.b64 \
+            .deploy-v05/part02.b64 \
+            .deploy-v05/part03.b64 \
+            .deploy-v05/p04_0.b64 \
+            .deploy-v05/p04_1.b64 \
+            .deploy-v05/p04_2.b64 \
+            .deploy-v05/p04_3.b64 \
+            .deploy-v05/p04_4.b64 \
+            .deploy-v05/part05.b64 \
+            .deploy-v05/part06.b64 \
+            .deploy-v05/part07.b64 > /tmp/animaca-v05.b64
           base64 --decode /tmp/animaca-v05.b64 > /tmp/animaca-v05.tgz
           echo '6248edc4046801be2f3f74420c92586f09125d1514c74efd944c662a0139ef48  /tmp/animaca-v05.tgz' | sha256sum -c -
           tar -tzf /tmp/animaca-v05.tgz >/dev/null
