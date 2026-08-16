@@ -1,0 +1,67 @@
+name: Instalar Animaca Agent v0.4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/install-v04.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  instalar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.14.0'
+
+      - name: Validar pacote v0.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'cc03ce9223a7f2b853a2172bf3ac48efd2f550e9dad359b99d081a308c18d783  .deploy-v04/part00.b64' | sha256sum -c -
+          echo '297f1e4ddd495fb830430d1d69ce3a3cae056c9946bb36bc7c64ff039ccae243  .deploy-v04/part01.b64' | sha256sum -c -
+          echo '5383cfdac34ade528962f7d8be7f7d691beba8aae1a4aaf0eb4a3d4f50d62571  .deploy-v04/part02.b64' | sha256sum -c -
+          echo 'c2412319b6ced298501512b7d5be9efbfc9694c34cdf0719afb71e7e48c2cf1b  .deploy-v04/part03.b64' | sha256sum -c -
+          echo 'd80bff446cf92431a48cdb1468f4b72c9ba78333d02ac1d629e7d9f6c8c34b54  .deploy-v04/part04.b64' | sha256sum -c -
+          cat .deploy-v04/part*.b64 > /tmp/animaca-v04.b64
+          base64 --decode /tmp/animaca-v04.b64 > /tmp/animaca-v04.tgz
+          echo 'cd4814b34d9532f7578a6217111d60ffe8205cbe35e8a84cdd47f5307f27d9ad  /tmp/animaca-v04.tgz' | sha256sum -c -
+          tar -tzf /tmp/animaca-v04.tgz >/dev/null
+          rm -rf /tmp/animaca-v04
+          tar -xzf /tmp/animaca-v04.tgz -C /tmp
+
+      - name: Instalar arquivos
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf netlify public
+          rm -f package.json netlify.toml .env.example .gitignore README.md CHANGELOG.md
+          cp -a /tmp/animaca-v04/. .
+          rm -rf .deploy-v04
+          rm -f .github/workflows/install-v04.yml
+
+      - name: Travar dependencias e validar
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm run check
+
+      - name: Salvar v0.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Evolui agente para estrategia diaria v0.4'
+          git push origin HEAD:main
