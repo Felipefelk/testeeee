@@ -416,6 +416,7 @@ export async function createProduct({ name, category = '', price = '', descripti
   const cleanName = String(name || '').trim();
   if (!cleanName) throw new Error('Nome do produto é obrigatório.');
   const saved = await persistSafeImage(file);
+  const publicImage = validateHttpsUrl(imageUrl);
   const link = await normalizeShopeeUrl(shopeeUrl);
   if (link) {
     const duplicate = (await listProducts()).find(p => p.shopeeUrl === link);
@@ -424,9 +425,9 @@ export async function createProduct({ name, category = '', price = '', descripti
   const now = nowIso();
   const p = {
     id: uuid(), name: cleanName, category: String(category || '').trim(), price: String(price || '').trim(),
-    description: String(description || '').trim(), imageUrl: validateHttpsUrl(imageUrl), shopeeUrl: link,
+    description: String(description || '').trim(), imageUrl: publicImage, shopeeUrl: link,
     mediaKey: saved?.mediaKey || '', imageMime: saved?.imageMime || '', active: true, source,
-    verified: Boolean(link && (saved?.mediaKey || imageUrl)), verifiedAt: link && (saved?.mediaKey || imageUrl) ? now : null, observedPrice: '', lastSyncSeenAt: null,
+    verified: Boolean(link && (saved?.mediaKey || publicImage)), verifiedAt: link && (saved?.mediaKey || publicImage) ? now : null, observedPrice: '', lastSyncSeenAt: null,
     lastPostedAt: null, performanceScore: 0, createdAt: now, updatedAt: null
   };
   const result = await productsStore().setJSON(`product/${p.id}`, p, { onlyIfNew: true });
@@ -1181,6 +1182,19 @@ export async function publishById(id) {
     await audit('publish_error', { postId: id, error: err.message, ambiguous: Boolean(err.ambiguous) });
     throw err;
   }
+}
+
+export async function resolvePostReview(id, resolution) {
+  if (!['published', 'cancelled'].includes(resolution)) throw new Error('Resolução inválida.');
+  const updated = await casPost(id, current => {
+    if (current.status !== 'needs_review') throw new Error('Este post não está aguardando revisão.');
+    const now = nowIso();
+    if (resolution === 'published') return { ...current, status: 'published', publishedAt: current.publishedAt || now, error: null, errorCode: null, errorSubcode: null, updatedAt: now };
+    return { ...current, status: 'cancelled', error: null, errorCode: null, errorSubcode: null, updatedAt: now };
+  });
+  if (updated.dailyDate && updated.plannerType) await markPlanSlot(updated.dailyDate, updated.plannerType, { state: resolution, postId: updated.id, ...(resolution === 'published' ? { publishedAt: updated.publishedAt } : {}) });
+  await audit('review_resolved', { postId: id, resolution });
+  return updated;
 }
 
 export async function publishDailySlot(type, dateRaw = null) {
