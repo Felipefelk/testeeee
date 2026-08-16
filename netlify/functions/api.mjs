@@ -1,7 +1,7 @@
 import {
   SESSION_COOKIE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
   bootstrapSummary, createProduct, updateProduct, updateProductImage, confirmProduct, deleteProduct,
-  generateManualSale, generateManualType, regeneratePostCreative, patchPost, generatePlan, syncShopeeCatalog, validateMetaConnection,
+  queueManualGeneration, queueCreativeGeneration, queueShopeeSync, getJob, regeneratePostCreative, patchPost, generatePlan, validateMetaConnection,
   publishById, resolvePostReview, getMedia, refreshRecentPerformance
 } from '../lib/agent.mjs';
 
@@ -76,7 +76,7 @@ export default async (req, context) => {
     if (route === '/bootstrap' && method === 'GET') return json(await bootstrapSummary());
     if (route === '/meta/validate' && method === 'POST') return json(await validateMetaConnection(true));
     if (route === '/performance/refresh' && method === 'POST') return json(await refreshRecentPerformance(6));
-    if (route === '/shopee/sync' && method === 'POST') return json(await syncShopeeCatalog({ force: false }));
+    if (route === '/shopee/sync' && method === 'POST') return json(await queueShopeeSync(), 202);
 
     if (route === '/products' && method === 'POST') {
       const form = await req.formData();
@@ -107,19 +107,25 @@ export default async (req, context) => {
 
     if (route === '/generate' && method === 'POST') {
       const body = await req.json().catch(() => ({}));
-      return json(await generateManualSale(body.productId));
+      return json(await queueManualGeneration('sale', body.productId), 202);
     }
 
     if (route === '/generate/type' && method === 'POST') {
       const body = await req.json().catch(() => ({}));
-      return json(await generateManualType(body.type, body.productId || null));
+      return json(await queueManualGeneration(body.type, body.productId || null), 202);
+    }
+
+    const jobMatch = route.match(/^\/jobs\/([^/]+)$/);
+    if (jobMatch && method === 'GET') {
+      const job = await getJob(jobMatch[1]);
+      return job ? json(job) : json({ error: 'Job não encontrado.' }, 404);
     }
 
     const postMatch = route.match(/^\/posts\/([^/]+)$/);
     if (postMatch && method === 'PATCH') return json(await patchPost(postMatch[1], await req.json()));
 
     const creativeMatch = route.match(/^\/posts\/([^/]+)\/creative$/);
-    if (creativeMatch && method === 'POST') { const body = await req.json().catch(() => ({})); return json(await regeneratePostCreative(creativeMatch[1], body.mode || 'template')); }
+    if (creativeMatch && method === 'POST') { const body = await req.json().catch(() => ({})); if (body.mode === 'ai') return json(await queueCreativeGeneration(creativeMatch[1]), 202); return json(await regeneratePostCreative(creativeMatch[1], body.mode || 'template')); }
 
     const reviewMatch = route.match(/^\/posts\/([^/]+)\/resolve-review$/);
     if (reviewMatch && method === 'POST') { const body = await req.json().catch(() => ({})); return json(await resolvePostReview(reviewMatch[1], body.resolution)); }

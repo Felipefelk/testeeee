@@ -1,72 +1,53 @@
-# Animaca Geek Facebook Agent v0.6
+# Animaca Geek Facebook Agent v0.7
 
-Agente serverless para Netlify que opera três frentes diárias: **Venda Shopee → Hype do momento → Crescimento**, com autonomia progressiva, Quality Gate, métricas e controle de custos.
+Agente serverless para Netlify com três frentes diárias: **Venda Shopee → Hype do momento → Crescimento**. A v0.7 transforma o antigo “Creative Engine” de template em um pipeline visual real: **GPT Image 2 gera o cenário; Sharp compõe a foto real do produto, tipografia e marca**.
 
-## Estratégia diária
+## Arquitetura v0.7
 
-- **09:15/09:35 BRT**: prepara a venda das 10h; a segunda janela é retry controlado.
-- **10:00 BRT**: publica a venda aprovada.
-- **14:15/14:35 BRT**: pesquisa e prepara o hype das 15h.
-- **15:00 BRT**: publica o hype aprovado.
-- **19:15/19:35 BRT**: prepara o conteúdo de crescimento das 20h.
-- **20:00 BRT**: publica o crescimento aprovado.
-- **03:00 BRT**: coleta performance recente.
-- **Domingo 03:30 BRT**: remove mídias órfãs antigas de forma conservadora.
+- Scheduled Functions ficam leves e apenas disparam trabalho.
+- `content-worker` é Background Function para copy, web search e geração de imagem, evitando o limite de 30 s do scheduler.
+- Publicação Meta continua em função curta, com execução principal e recovery 10 minutos depois.
+- Jobs manuais também usam o worker e o painel acompanha até concluir.
 
-O fluxo normal usa cerca de 10 execuções diárias de preparação/publicação, em vez das 96 verificações diárias da v0.4.
+## Segurança visual e comercial
 
-## O que mudou na v0.6
+- Venda nunca pede para a IA inventar o produto: o GPT Image 2 gera somente o fundo/cenário; a foto real cadastrada é composta por cima.
+- Imagens por URL são baixadas, validadas e internalizadas no Netlify Blobs.
+- Post automático só publica se a mídia interna ainda existir.
+- Copy não pode carregar URL; o link Shopee continua sendo acrescentado deterministicamente pelo servidor.
+- Hype guarda evidências da busca web e passa por filtro local + `omni-moderation-latest`.
+- Quality Gate com blocker nunca pode aparecer como 100/100.
 
-### Segurança e confiabilidade
-- Lock de publicação expirado vai para `needs_review`; nunca republica automaticamente.
-- HTTP 5xx/408 da Meta é tratado como resultado potencialmente ambíguo.
-- Estado incerto pode ser encerrado manualmente como “já está no Facebook” ou “não publicou”.
-- Origin check, CSP sem `unsafe-inline`, token Meta via `Authorization: Bearer` e API `no-store`.
-- Imagens remotas têm proteção contra destinos privados e limite real durante streaming.
+## Loja Shopee
 
-### Shopee e produtos
-- Link Shopee é inserido pelo servidor, nunca pela IA.
-- URL é canonicalizada e shortlinks `s.shopee.com.br` têm resolução segura quando possível.
-- Cadastro duplicado pelo mesmo link é bloqueado.
-- Produto automático só entra na rotação quando estiver ativo, confirmado, com link e foto real.
-- Alterar preço/descrição não desconfirma o produto; somente mudança real de URL exige nova confirmação.
+- `AUTO_SYNC_SHOPEE=true` habilita uma busca diária às 08:30 BRT em Background Function.
+- Produtos não encontrados repetidamente ficam `stale` e saem da rotação automática.
+- Itens novos encontrados continuam exigindo confirmação humana e foto real antes de vender.
 
-### Conteúdo e visual
-- Creative Engine v2 cria artes 1080×1080 predominantemente brancas, com seis variações e foto real nas vendas.
-- Hype e crescimento recebem composição visual própria sem inventar produto.
-- O painel permite refazer a arte ou voltar à foto original.
-- Preview no estilo Facebook mostra o resultado final antes da aprovação.
-- Testes de Venda, Hype e Crescimento podem ser criados a qualquer momento como rascunho.
+## Horários
 
-### Operação
-- Dashboard dividido em Hoje, Conteúdo, Produtos, Automação, Métricas e Sistema.
-- Central “Hoje” mostra os três slots e o que precisa de revisão.
-- Estados são traduzidos na interface.
-- Catálogo e posts têm busca/filtros.
-- Auditoria é apresentada em linguagem operacional, com detalhes técnicos recolhidos.
-- Saúde distingue Saudável, Atenção, Erro e Desligado.
+- 09:15/09:35 BRT: prepara venda.
+- 10:00 + recovery 10:10: publica venda.
+- 14:15/14:35: prepara hype.
+- 15:00 + recovery 15:10: publica hype.
+- 19:15/19:35: prepara crescimento.
+- 20:00 + recovery 20:10: publica crescimento.
+- 03:00 e 15:00: coleta de métricas; cada post guarda snapshots comparáveis de ~24 h e ~72 h.
+- 08:30: sync Shopee opcional.
+- domingo 03:30: limpeza em background.
 
-### Eficiência e aprendizado
-- Budget diário separado para copy, web e sincronização.
-- Painel mostra uso/limite e modelos configurados.
-- Performance do produto é recalculada a partir de amostras únicas, evitando somar repetidamente a mesma medição.
-- Rotação considera vendas realmente publicadas, não rascunhos cancelados.
-- Índice recente evita scan completo do histórico a cada refresh.
+## Homologação
 
-## Homologação segura
-
-Comece com:
+Mantenha inicialmente:
 
 ```env
 AUTO_PLAN=false
 AUTO_APPROVE_PLANNER=false
 AUTO_PUBLISH=false
+AUTO_SYNC_SHOPEE=false
+REQUIRE_AI_VISUAL=true
 ```
 
-Depois avance em três fases:
+Teste manualmente Venda, Hype e Crescimento. Depois ligue `AUTO_PLAN`, em seguida `AUTO_SYNC_SHOPEE`, depois aprovação automática e por último publicação automática.
 
-1. `AUTO_PLAN=true` — o agente prepara sozinho, mas você revisa.
-2. `AUTO_APPROVE_PLANNER=true` — somente posts que passarem no Quality Gate podem ser aprovados automaticamente.
-3. `AUTO_PUBLISH=true` — libere apenas depois de homologar visual, conteúdo, Shopee e Meta.
-
-Nunca coloque tokens ou chaves no GitHub. Secrets permanecem apenas nas variáveis de ambiente do Netlify.
+Nunca coloque tokens ou chaves no GitHub.
