@@ -426,7 +426,7 @@ export async function createProduct({ name, category = '', price = '', descripti
     id: uuid(), name: cleanName, category: String(category || '').trim(), price: String(price || '').trim(),
     description: String(description || '').trim(), imageUrl: validateHttpsUrl(imageUrl), shopeeUrl: link,
     mediaKey: saved?.mediaKey || '', imageMime: saved?.imageMime || '', active: true, source,
-    verified: Boolean(link), verifiedAt: link ? now : null, observedPrice: '', lastSyncSeenAt: null,
+    verified: Boolean(link && (saved?.mediaKey || imageUrl)), verifiedAt: link && (saved?.mediaKey || imageUrl) ? now : null, observedPrice: '', lastSyncSeenAt: null,
     lastPostedAt: null, performanceScore: 0, createdAt: now, updatedAt: null
   };
   const result = await productsStore().setJSON(`product/${p.id}`, p, { onlyIfNew: true });
@@ -472,6 +472,7 @@ export async function updateProductImage(id, file) {
 export async function confirmProduct(id) {
   const updated = await casProduct(id, p => {
     if (!p.shopeeUrl) throw new Error('Produto sem link específico da Shopee.');
+    if (!p.mediaKey && !p.imageUrl) throw new Error('Adicione uma foto real antes de confirmar o produto.');
     return {
       ...p,
       price: p.price || p.observedPrice || '', active: true, verified: true, verifiedAt: nowIso(), updatedAt: nowIso()
@@ -759,7 +760,7 @@ async function createCreative({ type, message, topic, product, salt = '' }) {
     if (variant % 3 === 0) {
       const photo = await sharp(image).rotate().resize(860, 560, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
       composites.push({ input: photo, left: 110, top: 120 });
-      titleY = 790; titleWidth = 850; titleSize = 55;
+      titleY = 720; titleWidth = 850; titleSize = 46;
     } else if (variant % 3 === 1) {
       const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
       composites.push({ input: photo, left: 520, top: 180 });
@@ -775,16 +776,16 @@ async function createCreative({ type, message, topic, product, salt = '' }) {
     titleWidth = 860;
   }
 
-  const titleLines = wrapTextPx(headline, titleWidth, titleSize, isSale ? 4 : 5);
-  const subSize = isSale ? 34 : 32;
-  const subLines = wrapTextPx(sub, titleWidth, subSize, isSale ? 2 : 3);
+  const titleLines = wrapTextPx(headline, titleWidth, titleSize, isSale ? (variant % 3 === 0 ? 3 : 4) : 5);
+  const subSize = isSale ? (variant % 3 === 0 ? 28 : 34) : 32;
+  const subLines = wrapTextPx(sub, titleWidth, subSize, isSale ? (variant % 3 === 0 ? 1 : 2) : 3);
   const label = isSale ? 'ANIMACA GEEK • SHOPEE' : type === 'hype' ? 'ANIMACA GEEK • EM ALTA' : 'ANIMACA GEEK • COMUNIDADE';
   const footer = isSale ? 'Veja o link do produto na legenda' : type === 'hype' ? 'O que você achou?' : 'Sua opinião faz parte da conversa';
   const textSvg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
     <rect x="92" y="88" width="${Math.min(650, 40 + approxTextWidth(label, 25))}" height="50" rx="25" fill="${accent}"/>
     <text x="116" y="121" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#ffffff">${xmlEsc(label)}</text>
     ${svgLines(titleLines,{x:titleX,y:titleY,size:titleSize,gap:Math.round(titleSize*1.12),color:'#0b111b',weight:900,anchor:align})}
-    ${svgLines(subLines,{x:titleX,y:titleY + titleLines.length*Math.round(titleSize*1.12)+42,size:subSize,gap:44,color:'#475569',weight:600,anchor:align})}
+    ${svgLines(subLines,{x:titleX,y:titleY + titleLines.length*Math.round(titleSize*1.12)+(isSale && variant % 3 === 0 ? 26 : 42),size:subSize,gap:44,color:'#475569',weight:600,anchor:align})}
     <rect x="92" y="955" width="12" height="12" rx="6" fill="${accent}"/><text x="122" y="970" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" fill="#334155">${xmlEsc(footer)}</text>
   </svg>`;
   composites.push({ input: Buffer.from(textSvg), left: 0, top: 0 });
