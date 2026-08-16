@@ -360,8 +360,8 @@ export function productFreshnessState(p, nowMs = Date.now(), maxDays = 14) {
   if (!parsed) return { fresh: false, state: 'unknown', ageDays: null };
   const ageDays = Math.max(0, (nowMs - parsed) / 86400_000);
   const missing = Number(p.missingSyncCount || 0);
-  const fresh = ageDays <= maxDays && missing < 2;
-  return { fresh, state: fresh ? (missing ? 'attention' : 'fresh') : 'stale', ageDays: Number(ageDays.toFixed(1)) };
+  const fresh = ageDays <= maxDays;
+  return { fresh, state: fresh ? (missing ? 'attention' : 'fresh') : 'stale', ageDays: Number(ageDays.toFixed(1)), missingSyncCount: missing };
 }
 
 export function productView(p) {
@@ -546,14 +546,14 @@ export async function updateProductImage(id, file) {
 }
 
 export async function confirmProduct(id) {
-  const updated = await casProduct(id, p => {
-    if (!p.shopeeUrl) throw new Error('Produto sem link específico da Shopee.');
-    if (!p.mediaKey && !p.imageUrl) throw new Error('Adicione uma foto real antes de confirmar o produto.');
-    return {
-      ...p,
-      price: p.price || p.observedPrice || '', active: true, verified: true, verifiedAt: nowIso(), lastCatalogCheckAt: nowIso(), missingSyncCount: 0, catalogStatus: 'confirmed', updatedAt: nowIso()
-    };
-  });
+  const current = await getProduct(id);
+  if (!current) throw new Error('Produto não encontrado.');
+  if (!current.shopeeUrl) throw new Error('Produto sem link específico da Shopee.');
+  if (!current.mediaKey || !await mediaExists(current.mediaKey)) throw new Error('Adicione uma foto real válida e internalizada antes de confirmar o produto.');
+  const updated = await casProduct(id, p => ({
+    ...p,
+    price: p.price || p.observedPrice || '', active: true, verified: true, verifiedAt: nowIso(), lastCatalogCheckAt: nowIso(), missingSyncCount: 0, catalogStatus: 'confirmed', imageUrl: '', updatedAt: nowIso()
+  }));
   if (!updated) throw new Error('Produto não encontrado.');
   return updated;
 }
@@ -630,10 +630,16 @@ async function compactMemory(limit = 20) {
 }
 
 async function performanceDigest(limit = 6) {
-  const rows = (await listRecentPosts(80)).filter(p => p.status === 'published' && p.performance?.score != null)
-    .sort((a, b) => Number(b.performance.score || 0) - Number(a.performance.score || 0)).slice(0, limit);
+  const rows = (await listRecentPosts(80)).filter(p => p.status === 'published' && p.performance)
+    .map(p => {
+      const h24 = Number(p.performance?.windows?.h24?.score);
+      const h72 = Number(p.performance?.windows?.h72?.score);
+      const normalized = Number.isFinite(h24) ? h24 : Number.isFinite(h72) ? h72 / 3 : Number(p.performance?.score || 0);
+      return { ...p, normalizedPerformance: normalized };
+    })
+    .sort((a, b) => b.normalizedPerformance - a.normalizedPerformance).slice(0, limit);
   if (!rows.length) return 'Ainda sem histórico suficiente de performance.';
-  return rows.map(p => `${p.plannerType || 'post'} | ${p.topic || p.productName || 'tema'} | score ${p.performance.score}`).join('\n');
+  return rows.map(p => `${p.plannerType || 'post'} | ${p.topic || p.productName || 'tema'} | score normalizado ${Number(p.normalizedPerformance || 0).toFixed(1)}`).join('\n');
 }
 
 async function catalogDigest(limit = 14) {
@@ -823,22 +829,29 @@ function approxTextWidth(text, fontSize) {
   return [...String(text || '')].reduce((sum, ch) => sum + fontSize * (/[MW@#%]/.test(ch) ? .88 : /[ilI1.,' ]/.test(ch) ? .3 : .56), 0);
 }
 
+function trimWordPx(word, maxWidth, fontSize) {
+  if (approxTextWidth(word, fontSize) <= maxWidth) return word;
+  let out = '';
+  for (const ch of String(word || '')) {
+    if (approxTextWidth(`${out}${ch}…`, fontSize) > maxWidth) break;
+    out += ch;
+  }
+  return `${out || String(word || '').slice(0, 1)}…`;
+}
+
 function wrapTextPx(text, maxWidth, fontSize, maxLines = 4) {
-  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).map(w => trimWordPx(w, maxWidth, fontSize));
   const lines = [];
   let line = '';
   for (const word of words) {
     const candidate = line ? `${line} ${word}` : word;
     if (line && approxTextWidth(candidate, fontSize) > maxWidth) {
-      lines.push(line);
-      line = word;
+      lines.push(line); line = word;
       if (lines.length >= maxLines - 1) break;
     } else line = candidate;
   }
   if (line && lines.length < maxLines) lines.push(line);
-  if (words.join(' ').length > lines.join(' ').length && lines.length) {
-    lines[lines.length - 1] = lines[lines.length - 1].replace(/[.…]*$/, '') + '…';
-  }
+  if (words.join(' ').length > lines.join(' ').length && lines.length) lines[lines.length - 1] = lines[lines.length - 1].replace(/[.…]*$/, '') + '…';
   return lines;
 }
 
@@ -905,7 +918,12 @@ async function createCreative({ type, message, topic, product, salt = '', backgr
   const subLines = wrapTextPx(sub, titleWidth, subSize, isSale ? (variant % 3 === 0 ? 1 : 2) : 3);
   const label = isSale ? 'ANIMACA GEEK • SHOPEE' : type === 'hype' ? 'ANIMACA GEEK • EM ALTA' : 'ANIMACA GEEK • COMUNIDADE';
   const footer = isSale ? 'Veja o link do produto na legenda' : type === 'hype' ? 'O que você achou?' : 'Sua opinião faz parte da conversa';
+  const panelY = Math.max(160, titleY - titleSize - 38);
+  const panelH = Math.min(760, titleLines.length * Math.round(titleSize * 1.12) + subLines.length * 44 + 125);
+  const panelX = Math.max(60, titleX - 28);
+  const panelW = Math.min(960 - panelX, titleWidth + 56);
   const textSvg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
+    ${backgroundBuffer ? `<rect x="${panelX}" y="${panelY}" width="${panelW}" height="${panelH}" rx="30" fill="#ffffff" fill-opacity="0.86"/>` : ''}
     <rect x="92" y="88" width="${Math.min(650, 40 + approxTextWidth(label, 25))}" height="50" rx="25" fill="${accent}"/>
     <text x="116" y="121" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#ffffff">${xmlEsc(label)}</text>
     ${svgLines(titleLines,{x:titleX,y:titleY,size:titleSize,gap:Math.round(titleSize*1.12),color:'#0b111b',weight:900,anchor:align})}
@@ -921,15 +939,23 @@ async function createCreative({ type, message, topic, product, salt = '', backgr
 async function createAiCreative({ type, message, topic, product, salt = '' }) {
   await consumeAiBudget('image');
   const prompt = buildImagePrompt({ type, topic, category: product?.category || '' });
-  const generated = await generateImageBuffer({
-    apiKey: process.env.OPENAI_API_KEY,
-    prompt,
-    model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
-    quality: process.env.OPENAI_IMAGE_QUALITY || 'low',
-    size: '1024x1024'
-  });
-  const backgroundBuffer = await sharp(generated.buffer, { failOn: 'error' }).rotate().resize(1080, 1080, { fit: 'cover' }).webp({ quality: 92 }).toBuffer();
-  return createCreative({ type, message, topic, product, salt, backgroundBuffer, visualSource: 'openai-image', aiModel: generated.model });
+  const configured = String(process.env.OPENAI_IMAGE_QUALITY || 'smart').toLowerCase();
+  const quality = configured === 'smart' ? (type === 'sale' ? 'low' : 'medium') : configured;
+  if (!['low', 'medium', 'high', 'auto'].includes(quality)) throw new Error('OPENAI_IMAGE_QUALITY inválida. Use smart, low, medium, high ou auto.');
+  try {
+    const generated = await generateImageBuffer({
+      apiKey: process.env.OPENAI_API_KEY,
+      prompt,
+      model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
+      quality,
+      size: '1024x1024'
+    });
+    const backgroundBuffer = await sharp(generated.buffer, { failOn: 'error' }).rotate().resize(1080, 1080, { fit: 'cover' }).webp({ quality: 92 }).toBuffer();
+    return createCreative({ type, message, topic, product, salt, backgroundBuffer, visualSource: 'openai-image', aiModel: generated.model });
+  } catch (err) {
+    await markAiFailure();
+    throw err;
+  }
 }
 
 async function assessTextSafety(message) {
@@ -976,6 +1002,7 @@ async function qualityGate(post, product = null) {
     if (product && !product.verified) blockers.push('produto ainda não confirmado');
     if (!post.shopeeUrl || post.shopeeUrl !== product?.shopeeUrl) blockers.push('link Shopee não confere com o produto atual');
     if (!product?.mediaKey) blockers.push('produto sem foto real interna validada');
+    else if (!await mediaExists(product.mediaKey)) blockers.push('arquivo da foto real do produto não existe mais');
     if (product && !productFreshnessState(product, Date.now(), intEnv('PRODUCT_MAX_STALE_DAYS', 14)).fresh) blockers.push('produto sem verificação recente no catálogo');
   }
   if (post.plannerType === 'hype') {
@@ -990,7 +1017,8 @@ async function qualityGate(post, product = null) {
 
   score = Math.max(0, score);
   if (blockers.length) score = Math.min(score, 59);
-  return { score, blockers, warnings, maxSimilarity: Number(maxSimilarity.toFixed(3)), canAutoApprove: blockers.length === 0 && score >= intEnv('AUTO_APPROVE_MIN_SCORE', 85) };
+  const moderationReady = post.origin !== 'planner' || post.moderation?.checked === true;
+  return { score, blockers, warnings, maxSimilarity: Number(maxSimilarity.toFixed(3)), canAutoApprove: blockers.length === 0 && moderationReady && score >= intEnv('AUTO_APPROVE_MIN_SCORE', 85) };
 }
 
 async function insertPost({ product = null, displayName = '', message, imageUrl = '', mediaKey = '', imageMime = '', scheduledAt = null, origin = 'manual', plannerType = null, status = 'draft', topic = '', hypeConfidence = null, dailyDate = null, generatedVisual = false, visualMode = 'template', visualAiError = null, sources = [], hypeCheckedAt = null, moderation = null, sensitiveReasons = [] }) {
@@ -1021,7 +1049,7 @@ async function buildPostForType(type, scheduledAt, dailyDate, origin = 'planner'
     const safety = await assessTextSafety(generated.message);
     let creative = null, visualAiError = null;
     try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic, product }); }
-    catch (err) { visualAiError = err.message; console.error('[creative-ai-sale]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic, product }).catch(() => null); }
+    catch (err) { visualAiError = err.message; console.error('[creative-ai-sale]', err); if (boolEnv('REQUIRE_AI_VISUAL', true) && origin === 'planner') throw err; creative = await createCreative({ type, message: generated.message, topic: generated.topic, product }).catch(() => null); }
     return insertPost({ product, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate,
       mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: '', generatedVisual: Boolean(creative),
       visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
@@ -1031,7 +1059,7 @@ async function buildPostForType(type, scheduledAt, dailyDate, origin = 'planner'
     const safety = await assessTextSafety(`${generated.topic} ${generated.message}`);
     let creative = null, visualAiError = null;
     try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic }); }
-    catch (err) { visualAiError = err.message; console.error('[creative-ai-hype]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
+    catch (err) { visualAiError = err.message; console.error('[creative-ai-hype]', err); if (boolEnv('REQUIRE_AI_VISUAL', true) && origin === 'planner') throw err; creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
     return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic,
       hypeConfidence: generated.confidence, dailyDate, mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative),
       visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, sources: generated.sources, hypeCheckedAt: generated.hypeCheckedAt,
@@ -1041,7 +1069,7 @@ async function buildPostForType(type, scheduledAt, dailyDate, origin = 'planner'
   const safety = await assessTextSafety(generated.message);
   let creative = null, visualAiError = null;
   try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic }); }
-  catch (err) { visualAiError = err.message; console.error('[creative-ai-growth]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
+  catch (err) { visualAiError = err.message; console.error('[creative-ai-growth]', err); if (boolEnv('REQUIRE_AI_VISUAL', true) && origin === 'planner') throw err; creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
   return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate,
     mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative),
     visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
@@ -1084,10 +1112,10 @@ export async function regeneratePostCreative(id, mode = 'template') {
   let patch;
   if (mode === 'original') {
     if (!product || (!product.mediaKey && !product.imageUrl)) throw new Error('Este post não possui foto original de produto disponível.');
-    patch = { mediaKey: product.mediaKey || '', imageMime: product.imageMime || '', imageUrl: product.mediaKey ? '' : product.imageUrl || '', generatedVisual: false };
+    patch = { mediaKey: product.mediaKey || '', imageMime: product.imageMime || '', imageUrl: '', generatedVisual: false, visualMode: 'original', visualAiError: null };
   } else {
     const creative = await createCreative({ type: current.plannerType || 'growth', message: current.message, topic: current.topic, product, salt: uuid() });
-    patch = { mediaKey: creative.mediaKey, imageMime: creative.imageMime, imageUrl: '', generatedVisual: true, creativeVariant: creative.variant };
+    patch = { mediaKey: creative.mediaKey, imageMime: creative.imageMime, imageUrl: '', generatedVisual: true, visualMode: 'template', visualAiError: null, creativeVariant: creative.variant };
   }
   const updated = await casPost(id, async row => {
     Object.assign(row, patch);
@@ -1164,7 +1192,8 @@ export async function chooseSaleProduct() {
     if (Math.abs(perf) > 0.01) return perf;
     return (a.lastPostedAt ? Date.parse(a.lastPostedAt) : 0) - (b.lastPostedAt ? Date.parse(b.lastPostedAt) : 0);
   });
-  return products[0];
+  for (const product of products) if (await mediaExists(product.mediaKey)) return product;
+  throw new Error('Os produtos elegíveis estão com arquivos de foto ausentes. Atualize as fotos antes da automação.');
 }
 
 function planKey(date) { return `daily-plan/${date}`; }
@@ -1303,7 +1332,12 @@ async function casJob(id, mutate, retries = 5) {
 
 export async function getJob(id) {
   const entry = await getJobEntry(id);
-  return entry?.job || null;
+  if (!entry) return null;
+  const job = entry.job;
+  if (job.status === 'running' && Date.now() - Date.parse(job.updatedAt || 0) > 16 * 60_000) {
+    return casJob(id, current => current.status === 'running' ? ({ ...current, status: 'error', error: 'O worker excedeu o tempo máximo. Tente novamente.', workerToken: null, completedAt: nowIso(), updatedAt: nowIso() }) : current).catch(() => job);
+  }
+  return job;
 }
 
 async function queueJob(data) {
@@ -1325,22 +1359,41 @@ export async function queueCreativeGeneration(postId) {
   return queueJob({ kind: 'creative-ai', postId });
 }
 
+export async function queueShopeeSync() {
+  return queueJob({ kind: 'shopee-sync' });
+}
+
+async function claimGenerationJob(id) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const entry = await getJobEntry(id);
+    if (!entry) throw new Error('Job não encontrado.');
+    const job = entry.job;
+    if (['complete', 'error'].includes(job.status)) return { claimed: false, job };
+    if (job.status === 'running' && Date.now() - Date.parse(job.updatedAt || 0) < 16 * 60_000) return { claimed: false, job };
+    const token = uuid();
+    const next = { ...job, status: 'running', workerToken: token, updatedAt: nowIso(), error: null };
+    const result = await jobsStore().setJSON(`job/${id}`, next, { onlyIfMatch: entry.etag });
+    if (result.modified) return { claimed: true, token, job: next };
+  }
+  throw new Error('Outro worker assumiu este job.');
+}
+
 export async function runGenerationJob(id) {
-  const claim = await casJob(id, job => {
-    if (job.status === 'complete') return job;
-    if (job.status === 'running' && Date.now() - Date.parse(job.updatedAt || 0) < 14 * 60_000) return job;
-    return { ...job, status: 'running', updatedAt: nowIso(), error: null };
-  });
-  if (claim.status === 'complete') return claim;
-  if (claim.status === 'running' && claim.result) return claim;
+  const claim = await claimGenerationJob(id);
+  if (!claim.claimed) return claim.job;
   try {
     let result;
-    if (claim.kind === 'manual-generation') result = await generateManualType(claim.type, claim.productId || null);
-    else if (claim.kind === 'creative-ai') result = await regeneratePostCreativeAi(claim.postId);
+    if (claim.job.kind === 'manual-generation') result = await generateManualType(claim.job.type, claim.job.productId || null);
+    else if (claim.job.kind === 'creative-ai') result = await regeneratePostCreativeAi(claim.job.postId);
+    else if (claim.job.kind === 'shopee-sync') result = await syncShopeeCatalog({ force: false });
     else throw new Error('Tipo de job desconhecido.');
-    return await casJob(id, job => ({ ...job, status: 'complete', result: { postId: result.id }, updatedAt: nowIso(), completedAt: nowIso() }));
+    return await casJob(id, job => {
+      if (job.workerToken !== claim.token) throw new Error('O lock deste job mudou durante a execução.');
+      const publicResult = claim.job.kind === 'shopee-sync' ? result : { postId: result.id };
+      return { ...job, status: 'complete', result: publicResult, workerToken: null, updatedAt: nowIso(), completedAt: nowIso() };
+    });
   } catch (err) {
-    await casJob(id, job => ({ ...job, status: 'error', error: err.message, updatedAt: nowIso(), completedAt: nowIso() })).catch(() => {});
+    await casJob(id, job => job.workerToken === claim.token ? ({ ...job, status: 'error', error: err.message, workerToken: null, updatedAt: nowIso(), completedAt: nowIso() }) : job).catch(() => {});
     throw err;
   }
 }
@@ -1542,8 +1595,8 @@ async function recomputeProductPerformance(productId) {
 function duePerformanceWindow(post, now = Date.now()) {
   const ageHours = (now - Date.parse(post.publishedAt || 0)) / 3600_000;
   const windows = post.performance?.windows || {};
-  if (ageHours >= 72 && ageHours <= 14 * 24 && !windows.h72) return 'h72';
   if (ageHours >= 24 && ageHours <= 14 * 24 && !windows.h24) return 'h24';
+  if (ageHours >= 72 && ageHours <= 14 * 24 && !windows.h72) return 'h72';
   return null;
 }
 
@@ -1554,7 +1607,7 @@ async function refreshPostPerformance(post, windowKey) {
   const comments = Number(data?.comments?.summary?.total_count || 0);
   const shares = Number(data?.shares?.count || 0);
   const score = reactions + comments * 4 + shares * 6;
-  const snapshot = { reactions, comments, shares, score, checkedAt: nowIso(), window: windowKey };
+  const snapshot = { reactions, comments, shares, score, checkedAt: nowIso(), window: windowKey, ageHours: Number(((Date.now() - Date.parse(post.publishedAt || 0)) / 3600_000).toFixed(1)) };
   const updated = await casPost(post.id, p => {
     const windows = { ...(p.performance?.windows || {}), [windowKey]: snapshot };
     return { ...p, performance: { ...(p.performance || {}), ...snapshot, windows }, updatedAt: nowIso() };
@@ -1579,7 +1632,7 @@ export async function refreshRecentPerformance(limit = 6) {
 
 export function deriveHealthState(result) {
   if (result?.error) return 'error';
-  if (result?.autoPlan === false || result?.autoPublish === false) return 'off';
+  if (result?.autoPlan === false || result?.autoPublish === false || result?.autoSyncShopee === false) return 'off';
   if (result?.skipped) return 'warning';
   return 'ok';
 }
@@ -1635,7 +1688,7 @@ export async function bootstrapSummary() {
       openai: Boolean(process.env.OPENAI_API_KEY), autoPlan: boolEnv('AUTO_PLAN', false), autoApprovePlanner: boolEnv('AUTO_APPROVE_PLANNER', false),
       autoPublish: boolEnv('AUTO_PUBLISH', false), graphVersion: process.env.META_GRAPH_VERSION || 'v26.0', timezone: TIMEZONE,
       plannerSlots: plannerSlots(), meta,
-      shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl).length },
+      shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl && p.mediaKey && p.catalogFresh).length },
       counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, image: 0, failures: 0 },
       usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1), image: intEnv('AI_DAILY_IMAGE_LIMIT', 6) },
       models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra', image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2' },
@@ -1646,11 +1699,8 @@ export async function bootstrapSummary() {
 }
 
 export async function cleanupOrphanMedia({ minAgeDays = 14, limit = 80 } = {}) {
-  const [products, posts] = await Promise.all([listProducts(), listJson(postsStore, 'post/')]);
-  const referenced = new Set([
-    ...products.map(p => p.mediaKey).filter(Boolean),
-    ...posts.map(p => p.mediaKey).filter(Boolean)
-  ]);
+  const [products, posts] = await Promise.all([listJson(productsStore, 'product/'), listJson(postsStore, 'post/')]);
+  const referenced = new Set([...products.map(p => p.mediaKey).filter(Boolean), ...posts.map(p => p.mediaKey).filter(Boolean)]);
   const { blobs } = await mediaStore().list();
   let checked = 0, deleted = 0;
   const cutoff = Date.now() - minAgeDays * 86400_000;
@@ -1664,7 +1714,17 @@ export async function cleanupOrphanMedia({ minAgeDays = 14, limit = 80 } = {}) {
       if (created && created < cutoff) { await mediaStore().delete(blob.key); deleted++; }
     } catch {}
   }
-  const result = { checked, deleted, referenced: referenced.size, at: nowIso() };
+  const jobs = await jobsStore().list({ prefix: 'job/' });
+  let jobsDeleted = 0;
+  const jobCutoff = Date.now() - 7 * 86400_000;
+  for (const blob of jobs.blobs.slice(0, 100)) {
+    try {
+      const job = await jobsStore().get(blob.key, { type: 'json', consistency: 'strong' });
+      const timestamp = Date.parse(job?.completedAt || job?.createdAt || 0);
+      if (timestamp && timestamp < jobCutoff && ['complete','error'].includes(job?.status)) { await jobsStore().delete(blob.key); jobsDeleted++; }
+    } catch {}
+  }
+  const result = { checked, deleted, jobsDeleted, referenced: referenced.size, at: nowIso() };
   await audit('media_cleanup', result);
   return result;
 }

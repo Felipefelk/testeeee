@@ -32,7 +32,7 @@ Agente serverless para Netlify com três frentes diárias: **Venda Shopee → Hy
 - 15:00 + recovery 15:10: publica hype.
 - 19:15/19:35: prepara crescimento.
 - 20:00 + recovery 20:10: publica crescimento.
-- 03:00: métricas com snapshots de 24 h e 72 h.
+- 03:00 e 15:00: coleta de métricas; cada post guarda snapshots comparáveis de ~24 h e ~72 h.
 - 08:30: sync Shopee opcional.
 - domingo 03:30: limpeza em background.
 

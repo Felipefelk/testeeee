@@ -1,7 +1,7 @@
 import {
   SESSION_COOKIE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
   bootstrapSummary, createProduct, updateProduct, updateProductImage, confirmProduct, deleteProduct,
-  queueManualGeneration, queueCreativeGeneration, getJob, regeneratePostCreative, patchPost, generatePlan, syncShopeeCatalog, validateMetaConnection,
+  queueManualGeneration, queueCreativeGeneration, queueShopeeSync, getJob, regeneratePostCreative, patchPost, generatePlan, validateMetaConnection,
   publishById, resolvePostReview, getMedia, refreshRecentPerformance
 } from '../lib/agent.mjs';
 
@@ -76,7 +76,7 @@ export default async (req, context) => {
     if (route === '/bootstrap' && method === 'GET') return json(await bootstrapSummary());
     if (route === '/meta/validate' && method === 'POST') return json(await validateMetaConnection(true));
     if (route === '/performance/refresh' && method === 'POST') return json(await refreshRecentPerformance(6));
-    if (route === '/shopee/sync' && method === 'POST') return json(await syncShopeeCatalog({ force: false }));
+    if (route === '/shopee/sync' && method === 'POST') return json(await queueShopeeSync(), 202);
 
     if (route === '/products' && method === 'POST') {
       const form = await req.formData();
