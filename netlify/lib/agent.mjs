@@ -699,7 +699,7 @@ Memória recente para não repetir:
 ${await compactMemory() || 'sem posts recentes'}`;
   const response = await aiResponse({
     kind: 'web',
-    model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra',
+    model: process.env.OPENAI_WEB_MODEL || 'gpt-5.6-terra',
     tools: [{ type: 'web_search' }], input: prompt
   });
   const parsed = extractJson(response.output_text);
@@ -734,7 +734,7 @@ export async function syncShopeeCatalog({ force = false } = {}) {
 Retorne JSON puro no formato {"products":[{"name":"...","price":"R$ ...","url":"https://shopee.com.br/...","confidence":0.0}]}.
 Máximo 30. Não invente item, preço nem URL. Itens novos serão enviados para revisão humana, então prefira precisão a quantidade.`;
   const response = await aiResponse({
-    kind: 'sync', model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra',
+    kind: 'sync', model: process.env.OPENAI_WEB_MODEL || 'gpt-5.6-terra',
     tools: [{ type: 'web_search' }], input: prompt
   });
   const parsed = extractJson(response.output_text);
@@ -1691,7 +1691,7 @@ export async function bootstrapSummary() {
       shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl && p.mediaKey && p.catalogFresh).length },
       counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, image: 0, failures: 0 },
       usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1), image: intEnv('AI_DAILY_IMAGE_LIMIT', 6) },
-      models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra', image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2' },
+      models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna', web: process.env.OPENAI_WEB_MODEL || 'gpt-5.6-terra', image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2' },
       imageQuality: process.env.OPENAI_IMAGE_QUALITY || 'smart', requireAiVisual: boolEnv('REQUIRE_AI_VISUAL', true), autoSyncShopee: boolEnv('AUTO_SYNC_SHOPEE', false), version: '0.7.0'
     },
     data: { products, posts, plans, audit: auditLog?.items || [], health: decorateHealth(health || {}), settings: { timezone: TIMEZONE, plannerSlots: plannerSlots(), storage: 'Netlify Blobs', strategy: PLAN_TYPES } }
