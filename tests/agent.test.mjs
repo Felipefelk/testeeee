@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFinalMessage, textSimilarity, plannerSlots, canonicalizeShopeeUrl } from '../netlify/lib/agent.mjs';
+import { buildFinalMessage, textSimilarity, plannerSlots, canonicalizeShopeeUrl, isPrivateAddress, deriveHealthState } from '../netlify/lib/agent.mjs';
 
 test('link Shopee é acrescentado deterministicamente uma única vez', () => {
   const post = { plannerType: 'sale', message: 'Confira esta caneca.', shopeeUrl: 'https://shopee.com.br/produto-123' };
@@ -35,4 +35,19 @@ test('slots são fixos para coincidir com os crons de produção', () => {
   process.env.PLANNER_SLOTS = '01:00,02:00,03:00';
   assert.deepEqual(plannerSlots(), ['10:00', '15:00', '20:00']);
   if (before === undefined) delete process.env.PLANNER_SLOTS; else process.env.PLANNER_SLOTS = before;
+});
+
+
+test('endereços privados são bloqueados', () => {
+  assert.equal(isPrivateAddress('127.0.0.1'), true);
+  assert.equal(isPrivateAddress('10.0.0.8'), true);
+  assert.equal(isPrivateAddress('192.168.1.3'), true);
+  assert.equal(isPrivateAddress('8.8.8.8'), false);
+});
+
+test('health distingue desligado de saudável', () => {
+  assert.equal(deriveHealthState({ autoPlan: false }), 'off');
+  assert.equal(deriveHealthState({ skipped: true }), 'warning');
+  assert.equal(deriveHealthState({ error: 'x' }), 'error');
+  assert.equal(deriveHealthState({ ok: true }), 'ok');
 });

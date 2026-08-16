@@ -5,6 +5,8 @@ import sharp from 'sharp';
 import { DateTime } from 'luxon';
 import { v4 as uuid } from 'uuid';
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 
 export const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
 export const SESSION_COOKIE = 'animaca_session';
@@ -132,6 +134,106 @@ export function canonicalizeShopeeUrl(raw) {
     throw new Error('Use o link específico do produto, não o link da loja Shopee.');
   }
   return u.toString();
+}
+
+
+export function isPrivateAddress(address) {
+  const raw = String(address || '').trim().toLowerCase();
+  const version = net.isIP(raw);
+  if (version === 4) {
+    const p = raw.split('.').map(Number);
+    return p[0] === 10 || p[0] === 127 || p[0] === 0 ||
+      (p[0] === 169 && p[1] === 254) || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+      (p[0] === 192 && p[1] === 168) || (p[0] === 100 && p[1] >= 64 && p[1] <= 127) ||
+      p[0] >= 224;
+  }
+  if (version === 6) {
+    if (raw === '::' || raw === '::1') return true;
+    if (raw.startsWith('fc') || raw.startsWith('fd') || raw.startsWith('fe8') || raw.startsWith('fe9') || raw.startsWith('fea') || raw.startsWith('feb')) return true;
+    if (raw.startsWith('::ffff:')) return isPrivateAddress(raw.slice(7));
+  }
+  return false;
+}
+
+async function assertPublicHostname(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) throw new Error('Destino de imagem não permitido.');
+  if (net.isIP(host)) {
+    if (isPrivateAddress(host)) throw new Error('Destino de imagem privado não permitido.');
+    return;
+  }
+  const addresses = await dns.lookup(host, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(x => isPrivateAddress(x.address))) throw new Error('Destino de imagem privado não permitido.');
+}
+
+async function fetchPublicHttps(raw, { headers = {}, timeout = 7000, maxRedirects = 4 } = {}) {
+  let current = new URL(validateHttpsUrl(raw, { optional: false }));
+  for (let n = 0; n <= maxRedirects; n++) {
+    await assertPublicHostname(current.hostname);
+    const response = await fetch(current, { redirect: 'manual', headers, signal: AbortSignal.timeout(timeout) });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const loc = response.headers.get('location');
+      response.body?.cancel().catch(() => {});
+      if (!loc) throw new Error('Redirecionamento sem destino.');
+      const next = new URL(loc, current);
+      if (next.protocol !== 'https:') throw new Error('Redirecionamento inseguro bloqueado.');
+      current = next;
+      continue;
+    }
+    return { response, finalUrl: current.toString() };
+  }
+  throw new Error('Redirecionamentos demais.');
+}
+
+async function readResponseLimited(response, maxBytes = 10 * 1024 * 1024) {
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared && declared > maxBytes) throw new Error('Imagem remota maior que 10 MB.');
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error('Imagem remota maior que 10 MB.');
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+export async function normalizeShopeeUrl(raw) {
+  let value = canonicalizeShopeeUrl(raw);
+  if (!value) return '';
+  let current = new URL(value);
+  if (current.hostname.toLowerCase() !== 's.shopee.com.br') return value;
+  try {
+    for (let n = 0; n < 5; n++) {
+      const response = await fetch(current, {
+        redirect: 'manual',
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; AnimacaGeekAgent/0.6)' },
+        signal: AbortSignal.timeout(6500)
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        response.body?.cancel().catch(() => {});
+        break;
+      }
+      const loc = response.headers.get('location');
+      response.body?.cancel().catch(() => {});
+      if (!loc) break;
+      const next = new URL(loc, current);
+      if (next.protocol !== 'https:' || !/(^|\.)shopee\.com\.br$/i.test(next.hostname)) throw new Error('Redirecionamento Shopee inválido.');
+      current = next;
+      if (current.hostname.toLowerCase() !== 's.shopee.com.br') break;
+    }
+    value = canonicalizeShopeeUrl(current.toString());
+  } catch (err) {
+    console.warn('[shopee-shortlink]', err.message);
+  }
+  return value;
 }
 
 const parseBooleanInput = value => {
@@ -314,7 +416,11 @@ export async function createProduct({ name, category = '', price = '', descripti
   const cleanName = String(name || '').trim();
   if (!cleanName) throw new Error('Nome do produto é obrigatório.');
   const saved = await persistSafeImage(file);
-  const link = canonicalizeShopeeUrl(shopeeUrl);
+  const link = await normalizeShopeeUrl(shopeeUrl);
+  if (link) {
+    const duplicate = (await listProducts()).find(p => p.shopeeUrl === link);
+    if (duplicate) { const e = new Error(`Este link da Shopee já pertence ao produto “${duplicate.name}”.`); e.status = 409; throw e; }
+  }
   const now = nowIso();
   const p = {
     id: uuid(), name: cleanName, category: String(category || '').trim(), price: String(price || '').trim(),
@@ -329,13 +435,24 @@ export async function createProduct({ name, category = '', price = '', descripti
 }
 
 export async function updateProduct(id, body) {
-  const updated = await casProduct(id, current => {
+  const updated = await casProduct(id, async current => {
     if ('name' in body) { const n = String(body.name || '').trim(); if (!n) throw new Error('Nome é obrigatório.'); current.name = n; }
     if ('category' in body) current.category = String(body.category || '').trim();
     if ('price' in body) current.price = String(body.price || '').trim();
     if ('description' in body) current.description = String(body.description || '').trim();
     if ('imageUrl' in body) current.imageUrl = validateHttpsUrl(body.imageUrl);
-    if ('shopeeUrl' in body) { current.shopeeUrl = canonicalizeShopeeUrl(body.shopeeUrl); current.verified = false; current.verifiedAt = null; }
+    if ('shopeeUrl' in body) {
+      const nextUrl = await normalizeShopeeUrl(body.shopeeUrl);
+      if (nextUrl !== (current.shopeeUrl || '')) {
+        if (nextUrl) {
+          const duplicate = (await listProducts()).find(p => p.id !== id && p.shopeeUrl === nextUrl);
+          if (duplicate) { const e = new Error(`Este link da Shopee já pertence ao produto “${duplicate.name}”.`); e.status = 409; throw e; }
+        }
+        current.shopeeUrl = nextUrl;
+        current.verified = false;
+        current.verifiedAt = null;
+      }
+    }
     if ('active' in body) current.active = parseBooleanInput(body.active);
     current.updatedAt = nowIso();
     return current;
@@ -519,7 +636,7 @@ export async function syncShopeeCatalog({ force = false } = {}) {
   for (const item of incoming.slice(0, 30)) {
     try {
       const name = String(item.name || '').trim();
-      const url = canonicalizeShopeeUrl(item.url);
+      const url = await normalizeShopeeUrl(item.url);
       const confidence = Math.max(0, Math.min(1, Number(item.confidence ?? 0)));
       if (!name || !url || confidence < 0.55) { ignored++; continue; }
       const old = byUrl.get(url);
@@ -575,43 +692,105 @@ async function productImageBuffer(product) {
   }
   if (product?.imageUrl) {
     try {
-      const res = await fetch(product.imageUrl, { signal: AbortSignal.timeout(6500), headers: { accept: 'image/*' } });
-      const len = Number(res.headers.get('content-length') || 0);
-      if (!res.ok || (len && len > 10 * 1024 * 1024)) return null;
-      const buf = Buffer.from(await res.arrayBuffer());
+      const { response } = await fetchPublicHttps(product.imageUrl, { headers: { accept: 'image/*' }, timeout: 6500 });
+      if (!response.ok) return null;
+      const buf = await readResponseLimited(response);
       const detected = await fileTypeFromBuffer(buf);
       if (detected && ['image/jpeg', 'image/png', 'image/webp'].includes(detected.mime)) return buf;
-    } catch {}
+    } catch (err) { console.warn('[remote-image]', err.message); }
   }
   return null;
 }
 
-async function createCreative({ type, message, topic, product }) {
-  const headline = type === 'sale' ? (product?.name || 'Produto Animaca Geek') : (topic || (type === 'hype' ? 'Hype Geek' : 'Bora conversar?'));
-  const sub = type === 'sale' ? (product?.price || 'Personalizado do seu jeito') : (String(message || '').split('\n').find(Boolean) || 'Animaca Geek');
-  const titleLines = wrapText(headline, type === 'sale' ? 24 : 27, 4);
-  const subLines = wrapText(sub, 42, 3);
-  const accent = type === 'hype' ? '#c084fc' : type === 'growth' ? '#60a5fa' : '#00ff66';
-  const image = type === 'sale' ? await productImageBuffer(product) : null;
-  let base = sharp({ create: { width: 1080, height: 1080, channels: 4, background: '#090d16' } });
-  const composites = [];
-  if (image) {
-    const photo = await sharp(image).rotate().resize(900, 610, { fit: 'contain', background: '#ffffff' }).webp({ quality: 90 }).toBuffer();
-    composites.push({ input: photo, left: 90, top: 70 });
+function approxTextWidth(text, fontSize) {
+  return [...String(text || '')].reduce((sum, ch) => sum + fontSize * (/[MW@#%]/.test(ch) ? .88 : /[ilI1.,' ]/.test(ch) ? .3 : .56), 0);
+}
+
+function wrapTextPx(text, maxWidth, fontSize, maxLines = 4) {
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && approxTextWidth(candidate, fontSize) > maxWidth) {
+      lines.push(line);
+      line = word;
+      if (lines.length >= maxLines - 1) break;
+    } else line = candidate;
   }
-  const titleStart = image ? 755 : 255;
-  const svg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
-    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${accent}" stop-opacity=".22"/><stop offset="1" stop-color="#090d16" stop-opacity="0"/></linearGradient></defs>
-    <rect width="1080" height="1080" rx="0" fill="url(#g)"/>
-    <rect x="70" y="${titleStart-55}" width="940" height="${image ? 280 : 600}" rx="36" fill="#101722" stroke="#263249" stroke-width="2"/>
-    <text x="110" y="${titleStart-10}" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="${accent}">${xmlEsc(type === 'sale' ? 'ANIMACA GEEK • SHOPEE' : type === 'hype' ? 'ANIMACA GEEK • HYPE' : 'ANIMACA GEEK • COMUNIDADE')}</text>
-    ${titleLines.map((l,i)=>`<text x="110" y="${titleStart+60+i*74}" font-family="Arial, sans-serif" font-size="62" font-weight="800" fill="#ffffff">${xmlEsc(l)}</text>`).join('')}
-    ${subLines.map((l,i)=>`<text x="110" y="${titleStart+90+titleLines.length*74+i*42}" font-family="Arial, sans-serif" font-size="30" fill="#cbd5e1">${xmlEsc(l)}</text>`).join('')}
-    <text x="110" y="1020" font-family="Arial, sans-serif" font-size="24" fill="#94a3b8">Conteúdo criado pela Central Animaca Geek</text>
+  if (line && lines.length < maxLines) lines.push(line);
+  if (words.join(' ').length > lines.join(' ').length && lines.length) {
+    lines[lines.length - 1] = lines[lines.length - 1].replace(/[.…]*$/, '') + '…';
+  }
+  return lines;
+}
+
+function creativeVariant(seed) {
+  return crypto.createHash('sha256').update(String(seed || '')).digest()[0] % 6;
+}
+
+function svgLines(lines, { x, y, size, gap, color = '#0b111b', weight = 800, anchor = 'start' }) {
+  return lines.map((line, i) => `<text x="${x}" y="${y + i * gap}" text-anchor="${anchor}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${xmlEsc(line)}</text>`).join('');
+}
+
+async function createCreative({ type, message, topic, product, salt = '' }) {
+  const seed = `${type}|${topic || product?.name || ''}|${DateTime.now().setZone(TIMEZONE).toISODate()}|${salt}`;
+  const variant = creativeVariant(seed);
+  const isSale = type === 'sale';
+  const accent = type === 'hype' ? '#7c3aed' : type === 'growth' ? '#2563eb' : '#00b84a';
+  const soft = type === 'hype' ? '#f5f0ff' : type === 'growth' ? '#eef5ff' : '#effff4';
+  const headline = isSale ? (product?.name || 'Produto Animaca Geek') : (topic || (type === 'hype' ? 'Hype Geek' : 'Bora conversar?'));
+  const firstLine = String(message || '').split('\n').find(Boolean) || '';
+  const sub = isSale ? (product?.price || 'Disponível na Shopee') : firstLine;
+  const image = isSale ? await productImageBuffer(product) : null;
+  const base = sharp({ create: { width: 1080, height: 1080, channels: 4, background: '#ffffff' } });
+  const composites = [];
+
+  const decorations = variant % 3 === 0
+    ? `<circle cx="970" cy="110" r="180" fill="${soft}"/><circle cx="80" cy="980" r="210" fill="${soft}"/>`
+    : variant % 3 === 1
+      ? `<rect x="0" y="0" width="1080" height="220" fill="${soft}"/><circle cx="1020" cy="860" r="230" fill="${soft}"/>`
+      : `<path d="M0 0 H1080 V180 C760 310 360 40 0 220Z" fill="${soft}"/><path d="M1080 1080 H0 V930 C340 800 750 1060 1080 890Z" fill="${soft}"/>`;
+  const bg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1080" height="1080" fill="#fff"/>${decorations}<rect x="54" y="54" width="972" height="972" rx="38" fill="none" stroke="#e5e7eb" stroke-width="2"/></svg>`;
+  composites.push({ input: Buffer.from(bg), left: 0, top: 0 });
+
+  let titleX = 92, titleY = 650, titleWidth = 896, titleSize = 62, align = 'start';
+  if (isSale && image) {
+    if (variant % 3 === 0) {
+      const photo = await sharp(image).rotate().resize(860, 560, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
+      composites.push({ input: photo, left: 110, top: 120 });
+      titleY = 790; titleWidth = 850; titleSize = 55;
+    } else if (variant % 3 === 1) {
+      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
+      composites.push({ input: photo, left: 520, top: 180 });
+      titleX = 90; titleY = 410; titleWidth = 390; titleSize = 52;
+    } else {
+      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
+      composites.push({ input: photo, left: 55, top: 180 });
+      titleX = 600; titleY = 410; titleWidth = 390; titleSize = 52;
+    }
+  } else {
+    titleY = variant % 2 ? 420 : 360;
+    titleSize = variant % 2 ? 70 : 76;
+    titleWidth = 860;
+  }
+
+  const titleLines = wrapTextPx(headline, titleWidth, titleSize, isSale ? 4 : 5);
+  const subSize = isSale ? 34 : 32;
+  const subLines = wrapTextPx(sub, titleWidth, subSize, isSale ? 2 : 3);
+  const label = isSale ? 'ANIMACA GEEK • SHOPEE' : type === 'hype' ? 'ANIMACA GEEK • EM ALTA' : 'ANIMACA GEEK • COMUNIDADE';
+  const footer = isSale ? 'Veja o link do produto na legenda' : type === 'hype' ? 'O que você achou?' : 'Sua opinião faz parte da conversa';
+  const textSvg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
+    <rect x="92" y="88" width="${Math.min(650, 40 + approxTextWidth(label, 25))}" height="50" rx="25" fill="${accent}"/>
+    <text x="116" y="121" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#ffffff">${xmlEsc(label)}</text>
+    ${svgLines(titleLines,{x:titleX,y:titleY,size:titleSize,gap:Math.round(titleSize*1.12),color:'#0b111b',weight:900,anchor:align})}
+    ${svgLines(subLines,{x:titleX,y:titleY + titleLines.length*Math.round(titleSize*1.12)+42,size:subSize,gap:44,color:'#475569',weight:600,anchor:align})}
+    <rect x="92" y="955" width="12" height="12" rx="6" fill="${accent}"/><text x="122" y="970" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" fill="#334155">${xmlEsc(footer)}</text>
   </svg>`;
-  composites.push({ input: Buffer.from(svg), left: 0, top: 0 });
-  const output = await base.composite(composites).webp({ quality: 90 }).toBuffer();
-  return saveGeneratedMedia(output, { mime: 'image/webp', source: 'creative-engine', type });
+  composites.push({ input: Buffer.from(textSvg), left: 0, top: 0 });
+  const output = await base.composite(composites).webp({ quality: 92 }).toBuffer();
+  const saved = await saveGeneratedMedia(output, { mime: 'image/webp', source: 'creative-engine-v2', type, variant });
+  return { ...saved, variant };
 }
 
 export function textSimilarity(a, b) {
@@ -647,6 +826,7 @@ async function qualityGate(post, product = null) {
     if (/\b(eleição|presidente|governo|guerra|morreu|morte|assassin|crime|tragédia|tragico|tragico|acidente fatal)\b/i.test(`${post.topic || ''} ${msg}`)) blockers.push('tema sensível bloqueado');
   }
   if (post.plannerType === 'growth' && !msg.includes('?')) { score -= 10; warnings.push('post de crescimento sem pergunta clara'); }
+  if (post.origin === 'planner' && !post.mediaKey && !post.imageUrl) blockers.push('post automático sem arte visual');
   score = Math.max(0, score);
   return { score, blockers, warnings, maxSimilarity: Number(maxSimilarity.toFixed(3)), canAutoApprove: blockers.length === 0 && score >= intEnv('AUTO_APPROVE_MIN_SCORE', 85) };
 }
@@ -696,6 +876,41 @@ export async function generateManualSale(productId) {
   return insertPost({ product, message: generated.message, origin: 'manual', plannerType: 'sale', topic: generated.topic, mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: creative ? '' : product.imageUrl || '', generatedVisual: Boolean(creative) });
 }
 
+export async function generateManualType(type, productId = null) {
+  if (type === 'sale') return generateManualSale(productId);
+  if (!['hype', 'growth'].includes(type)) throw new Error('Tipo de teste inválido.');
+  const generated = type === 'hype' ? await generateHypePost() : await generateGrowthPost();
+  const creative = await createCreative({ type, message: generated.message, topic: generated.topic, salt: uuid() });
+  return insertPost({
+    displayName: type === 'hype' ? 'Hype do momento' : 'Crescimento',
+    message: generated.message, origin: 'manual', plannerType: type, topic: generated.topic,
+    hypeConfidence: generated.confidence ?? null, mediaKey: creative.mediaKey, imageMime: creative.imageMime, generatedVisual: true
+  });
+}
+
+export async function regeneratePostCreative(id, mode = 'template') {
+  const current = await getPost(id);
+  if (!current) throw new Error('Post não encontrado.');
+  if (['published', 'publishing'].includes(current.status)) throw new Error('Não é possível trocar a arte de um post já publicado/em publicação.');
+  const product = current.productId ? await getProduct(current.productId) : null;
+  let patch;
+  if (mode === 'original') {
+    if (!product || (!product.mediaKey && !product.imageUrl)) throw new Error('Este post não possui foto original de produto disponível.');
+    patch = { mediaKey: product.mediaKey || '', imageMime: product.imageMime || '', imageUrl: product.mediaKey ? '' : product.imageUrl || '', generatedVisual: false };
+  } else {
+    const creative = await createCreative({ type: current.plannerType || 'growth', message: current.message, topic: current.topic, product, salt: uuid() });
+    patch = { mediaKey: creative.mediaKey, imageMime: creative.imageMime, imageUrl: '', generatedVisual: true, creativeVariant: creative.variant };
+  }
+  const updated = await casPost(id, async row => {
+    Object.assign(row, patch);
+    if (row.status === 'approved') row.status = 'draft';
+    row.quality = await qualityGate(row, product);
+    row.updatedAt = nowIso();
+    return row;
+  });
+  return updated;
+}
+
 export async function patchPost(id, body) {
   const updated = await casPost(id, async current => {
     if (['publishing', 'published'].includes(current.status)) {
@@ -733,10 +948,10 @@ export async function patchPost(id, body) {
 
 
 export async function chooseSaleProduct() {
-  const products = (await listProducts()).filter(p => p.active && p.verified && p.shopeeUrl);
-  if (!products.length) throw new Error('Nenhum produto confirmado e ativo tem link da Shopee.');
+  const products = (await listProducts()).filter(p => p.active && p.verified && p.shopeeUrl && (p.mediaKey || p.imageUrl));
+  if (!products.length) throw new Error('Nenhum produto pronto para venda: precisa estar ativo, confirmado, com link Shopee e foto real.');
   const recent = await listRecentPosts(70);
-  const recentIds = new Set(recent.filter(p => p.plannerType === 'sale' && p.productId).slice(0, 5).map(p => p.productId));
+  const recentIds = new Set(recent.filter(p => p.status === 'published' && p.plannerType === 'sale' && p.productId).slice(0, 5).map(p => p.productId));
   products.sort((a, b) => {
     const ar = recentIds.has(a.id) ? 1 : 0, br = recentIds.has(b.id) ? 1 : 0;
     if (ar !== br) return ar - br;
@@ -899,7 +1114,7 @@ async function graphPost(endpoint, body) {
     const e = new Error(`Falha de rede ao chamar a Meta: ${err.message}`); e.ambiguous = true; throw e;
   }
   const json = await response.json().catch(() => ({}));
-  if (!response.ok) { const e = new Error(json?.error?.message || `Meta API retornou HTTP ${response.status}`); e.code = json?.error?.code; e.subcode = json?.error?.error_subcode; throw e; }
+  if (!response.ok) { const e = new Error(json?.error?.message || `Meta API retornou HTTP ${response.status}`); e.code = json?.error?.code; e.subcode = json?.error?.error_subcode; if (response.status >= 500 || response.status === 408) e.ambiguous = true; throw e; }
   return json;
 }
 
@@ -929,8 +1144,12 @@ async function claimPost(id) {
     if (row.status === 'publishing') {
       const age = Date.now() - Date.parse(row.publishLockAt || 0);
       if (age < PUBLISH_LOCK_MS) { const e = new Error('Este post já está em processo de publicação.'); e.status = 409; throw e; }
+      const review = { ...row, status: 'needs_review', error: 'A tentativa anterior ficou sem confirmação final. Verifique o Facebook antes de qualquer nova publicação.', publishToken: null, publishLockAt: null, updatedAt: nowIso() };
+      const moved = await store.setJSON(`post/${id}`, review, { onlyIfMatch: entry.etag });
+      if (moved.modified) await indexPost(review).catch(() => {});
+      const e = new Error('Publicação anterior com resultado incerto. O post foi enviado para revisão manual para evitar duplicação.'); e.status = 409; e.ambiguous = true; throw e;
     }
-    if (!['approved', 'publishing'].includes(row.status)) { const e = new Error('Apenas posts aprovados podem ser publicados.'); e.status = 409; throw e; }
+    if (row.status !== 'approved') { const e = new Error('Apenas posts aprovados podem ser publicados.'); e.status = 409; throw e; }
     const token = uuid(), now = nowIso();
     const next = { ...row, status: 'publishing', publishToken: token, publishLockAt: now, lastAttemptAt: now, error: null, errorCode: null, errorSubcode: null, updatedAt: now };
     const result = await store.setJSON(`post/${id}`, next, { onlyIfMatch: entry.etag });
@@ -986,6 +1205,16 @@ export async function publishDuePosts(limit = 10) {
   return { autoPublish: true, attempted: due.length, published, errors };
 }
 
+async function recomputeProductPerformance(productId) {
+  const samples = (await listRecentPosts(POST_INDEX_LIMIT))
+    .filter(p => p.status === 'published' && p.productId === productId && Number.isFinite(Number(p.performance?.score)))
+    .slice(0, 12);
+  if (!samples.length) return null;
+  const score = samples.reduce((sum, p) => sum + Number(p.performance.score || 0), 0) / samples.length;
+  await casProduct(productId, p => ({ ...p, performanceScore: Number(score.toFixed(2)), performanceSamples: samples.length, performanceUpdatedAt: nowIso(), updatedAt: nowIso() })).catch(() => {});
+  return score;
+}
+
 async function refreshPostPerformance(post) {
   if (!post?.metaPostId) return null;
   const data = await graphGet(post.metaPostId, { fields: 'reactions.limit(0).summary(true),comments.limit(0).summary(true),shares' });
@@ -995,23 +1224,29 @@ async function refreshPostPerformance(post) {
   const score = reactions + comments * 4 + shares * 6;
   const performance = { reactions, comments, shares, score, checkedAt: nowIso() };
   const updated = await casPost(post.id, p => ({ ...p, performance, updatedAt: nowIso() }));
-  if (updated.productId) {
-    await casProduct(updated.productId, p => {
-      const old = Number(p.performanceScore || 0);
-      return { ...p, performanceScore: Number((old * 0.65 + score * 0.35).toFixed(2)), updatedAt: nowIso() };
-    }).catch(() => {});
-  }
+  if (updated.productId) await recomputeProductPerformance(updated.productId);
   return performance;
 }
 
 export async function refreshRecentPerformance(limit = 6) {
   if (!process.env.META_PAGE_ACCESS_TOKEN) return { refreshed: 0, errors: ['Meta não configurada'] };
-  const candidates = (await listRecentPosts(80)).filter(p => p.status === 'published' && p.metaPostId).slice(0, limit);
+  const now = Date.now();
+  const candidates = (await listRecentPosts(POST_INDEX_LIMIT))
+    .filter(p => p.status === 'published' && p.metaPostId && p.publishedAt && now - Date.parse(p.publishedAt) >= 60 * 60_000 && now - Date.parse(p.publishedAt) <= 14 * 86400_000)
+    .sort((a, b) => String(a.performance?.checkedAt || '').localeCompare(String(b.performance?.checkedAt || '')))
+    .slice(0, limit);
   const results = await Promise.allSettled(candidates.map(refreshPostPerformance));
   const refreshed = results.filter(r => r.status === 'fulfilled').length;
   const errors = results.filter(r => r.status === 'rejected').map(r => r.reason?.message || 'erro');
   await audit('performance_refresh', { refreshed, errors: errors.length });
   return { refreshed, errors };
+}
+
+export function deriveHealthState(result) {
+  if (result?.error) return 'error';
+  if (result?.autoPlan === false || result?.autoPublish === false) return 'off';
+  if (result?.skipped) return 'warning';
+  return 'ok';
 }
 
 async function audit(type, data = {}) {
@@ -1025,7 +1260,8 @@ async function audit(type, data = {}) {
 
 export async function recordHealth(name, result) {
   return mutateSystemJson('health', {}, health => {
-    health[name] = { at: nowIso(), ok: !result?.error, result };
+    const state = deriveHealthState(result);
+    health[name] = { at: nowIso(), state, ok: state === 'ok', result };
     return health;
   });
 }
@@ -1054,10 +1290,36 @@ export async function bootstrapSummary() {
       autoPublish: boolEnv('AUTO_PUBLISH', false), graphVersion: process.env.META_GRAPH_VERSION || 'v26.0', timezone: TIMEZONE,
       plannerSlots: plannerSlots(), meta,
       shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl).length },
-      counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, failures: 0 }
+      counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, failures: 0 },
+      usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1) },
+      models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5-mini', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5' }, version: '0.6.0'
     },
     data: { products, posts, plans, audit: auditLog?.items || [], health: health || {}, settings: { timezone: TIMEZONE, plannerSlots: plannerSlots(), storage: 'Netlify Blobs', strategy: PLAN_TYPES } }
   };
+}
+
+export async function cleanupOrphanMedia({ minAgeDays = 14, limit = 80 } = {}) {
+  const [products, posts] = await Promise.all([listProducts(), listJson(postsStore, 'post/')]);
+  const referenced = new Set([
+    ...products.map(p => p.mediaKey).filter(Boolean),
+    ...posts.map(p => p.mediaKey).filter(Boolean)
+  ]);
+  const { blobs } = await mediaStore().list();
+  let checked = 0, deleted = 0;
+  const cutoff = Date.now() - minAgeDays * 86400_000;
+  for (const blob of blobs) {
+    if (checked >= limit) break;
+    if (referenced.has(blob.key)) continue;
+    checked++;
+    try {
+      const entry = await mediaStore().getWithMetadata(blob.key, { type: 'blob', consistency: 'strong' });
+      const created = Date.parse(entry?.metadata?.createdAt || 0);
+      if (created && created < cutoff) { await mediaStore().delete(blob.key); deleted++; }
+    } catch {}
+  }
+  const result = { checked, deleted, referenced: referenced.size, at: nowIso() };
+  await audit('media_cleanup', result);
+  return result;
 }
 
 export async function statusSummary() { return (await bootstrapSummary()).status; }
