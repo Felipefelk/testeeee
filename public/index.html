@@ -1,61 +1,127 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Animaca Geek • Agente v0.5</title>
-<style>
-:root{--bg:#090d16;--card:#121927;--card2:#0b111b;--line:#263249;--txt:#f8fafc;--muted:#94a3b8;--mint:#00ff66;--danger:#fb7185;--warn:#fbbf24;--blue:#60a5fa;--purple:#c084fc}
-*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,sans-serif;background:radial-gradient(circle at 10% 0,#123229 0,transparent 30%),var(--bg);color:var(--txt)}a{color:#86efac}.wrap{max-width:1320px;margin:auto;padding:24px 18px 80px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}.brand h1{margin:0;font-size:clamp(28px,4vw,44px);letter-spacing:-1.6px}.brand p{color:var(--muted);margin:7px 0 0}.pill,.badge{border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:11px;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:15px}.card{background:linear-gradient(180deg,#141d2d,#101722);border:1px solid var(--line);border-radius:19px;padding:19px;box-shadow:0 18px 50px #0005}.span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}.span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}.span12{grid-column:span 12}h2{font-size:17px;margin:0 0 14px}h3{font-size:14px;margin:0 0 8px}label{font-size:12px;color:var(--muted);display:block;margin:10px 0 5px}input,textarea,select{width:100%;background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:10px;color:var(--txt);outline:none}textarea{min-height:92px;resize:vertical}button{border:0;border-radius:11px;padding:10px 13px;font-weight:800;cursor:pointer;background:var(--mint);color:#031208}button.alt{background:#182336;color:var(--txt);border:1px solid var(--line)}button.danger{background:#3b1620;color:#fecdd3;border:1px solid #702638}button.small{padding:7px 9px;font-size:11px}button:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>*{flex:1}.row .fit{flex:0 0 auto}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.stat{background:var(--card2);border:1px solid var(--line);padding:13px;border-radius:13px}.stat b{display:block;font-size:24px}.stat small,.meta,.notice{color:var(--muted);font-size:12px}.notice{line-height:1.45;margin-top:9px}.item{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:13px;margin:9px 0}.copy{white-space:pre-wrap;color:#dce4ee;font-size:14px;line-height:1.5;margin:9px 0}.copy[contenteditable=true]{outline:1px dashed #34506f;padding:8px;border-radius:9px}.media{width:100%;max-height:320px;object-fit:cover;border-radius:12px;border:1px solid var(--line);margin:8px 0;background:#05080d}.product-media{width:82px;height:82px;object-fit:cover;border-radius:11px;border:1px solid var(--line);float:right;margin-left:10px}.ok{color:#6ee7b7}.no{color:#fda4af}.warn{color:#fde68a}.badge.published,.badge.sale{color:#6ee7b7;border-color:#166534}.badge.hype{color:#d8b4fe;border-color:#7e22ce}.badge.growth{color:#93c5fd;border-color:#1d4ed8}.badge.error,.badge.failed,.badge.needs_review,.badge.expired{color:#fda4af;border-color:#881337}.badge.approved,.badge.ready{color:#fde68a;border-color:#854d0e}.badge.planned{color:#cbd5e1}.strategy{display:grid;gap:8px}.strategy-row{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:start;background:var(--card2);border:1px solid var(--line);border-radius:13px;padding:11px}.strategy-row p{margin:2px 0 0;color:var(--muted);font-size:12px}.quality{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}.score{font-weight:900}.score.good{color:#6ee7b7}.score.mid{color:#fde68a}.score.bad{color:#fda4af}.plan-row{display:grid;grid-template-columns:65px 1fr auto;gap:9px;align-items:center;padding:9px 0;border-top:1px solid #1d293a}.plan-row:first-child{border-top:0}.audit{max-height:300px;overflow:auto}.toast{position:fixed;right:20px;bottom:20px;background:#182336;border:1px solid var(--line);padding:12px 15px;border-radius:12px;display:none;max-width:420px;z-index:90}.login-overlay{position:fixed;inset:0;background:#060910ee;display:none;align-items:center;justify-content:center;padding:20px;z-index:100}.login-box,dialog{width:min(520px,calc(100% - 30px));background:#111a28;border:1px solid var(--line);border-radius:20px;padding:22px;color:var(--txt);box-shadow:0 25px 70px #000}dialog::backdrop{background:#060910dd}.health-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.health-item{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:9px;font-size:11px}.shop-link{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.det-link{padding:9px;border-radius:9px;background:#09131a;border:1px dashed #285b43;color:#86efac;font-size:12px;word-break:break-all}
-@media(max-width:950px){.span3,.span4,.span5,.span6,.span7,.span8{grid-column:span 12}.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:repeat(3,1fr)}}@media(max-width:620px){.stats,.health-grid{grid-template-columns:1fr}.plan-row{grid-template-columns:56px 1fr}.plan-row .badge{grid-column:2}.row>*{flex-basis:100%}.row .fit{flex-basis:auto}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#090d16">
+  <title>Animaca Geek • Central v0.6</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
 </head>
-<body>
-<div class="login-overlay" id="loginOverlay"><form class="login-box" id="loginForm"><h2>Entrar na Central</h2><p class="notice">Sessão protegida por cookie HttpOnly.</p><label>Senha</label><input id="password" type="password" autocomplete="current-password" required><button style="width:100%;margin-top:12px">Entrar</button><div class="notice no" id="loginError"></div></form></div>
-<dialog id="productDialog"><form method="dialog" id="editProductForm"><h2>Editar produto</h2><input type="hidden" name="id"><label>Nome</label><input name="name" required><div class="row"><div><label>Categoria</label><input name="category"></div><div><label>Preço</label><input name="price"></div></div><label>Descrição</label><textarea name="description"></textarea><label>Link específico da Shopee</label><input name="shopeeUrl"><label>URL pública de imagem</label><input name="imageUrl"><div class="row" style="margin-top:12px"><button value="cancel" class="alt">Fechar</button><button value="save" id="saveProductEdit">Salvar alterações</button></div></form></dialog>
-<input id="replaceImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-<div class="wrap">
-<div class="top"><div class="brand"><h1>Central Animaca Geek <span class="badge">v0.5</span></h1><p>Venda Shopee → hype just-in-time → crescimento → aprendizado.</p></div><div class="row" style="flex:0 0 auto"><div class="pill" id="conn">Carregando…</div><button class="alt small fit" id="logout">Sair</button></div></div>
-<div class="grid">
-<section class="card span4"><h2>Visão geral</h2><div class="stats"><div class="stat"><b id="nProducts">0</b><small>produtos</small></div><div class="stat"><b id="nPosts">0</b><small>posts</small></div><div class="stat"><b id="nPending">0</b><small>na fila</small></div></div><div class="notice" id="tz"></div></section>
-<section class="card span4"><h2>Eficiência & IA</h2><div class="stats"><div class="stat"><b id="copyUsage">0</b><small>copy hoje</small></div><div class="stat"><b id="webUsage">0</b><small>web hoje</small></div><div class="stat"><b id="failUsage">0</b><small>falhas IA</small></div></div><div class="notice">O agente usa modelo econômico para copy e web apenas para hype/sincronização.</div></section>
-<section class="card span4"><h2>Conexão Meta</h2><div id="metaBox" class="notice">Verificando…</div><div class="row" style="margin-top:10px"><button class="alt" id="validateMeta">Validar Meta</button><button class="alt" id="refreshPerformance">Atualizar métricas</button></div></section>
-<section class="card span4"><h2>Estratégia diária</h2><div class="strategy"><div class="strategy-row"><span class="badge sale">10h</span><div><b>Venda Shopee</b><p>Produto confirmado, link inserido pelo código e arte automática.</p></div></div><div class="strategy-row"><span class="badge hype">15h</span><div><b>Hype do momento</b><p>Pesquisa perto do horário, com Quality Gate e bloqueio de tema sensível.</p></div></div><div class="strategy-row"><span class="badge growth">20h</span><div><b>Crescimento</b><p>Usa o histórico de performance para variar formato e tema.</p></div></div></div></section>
-<section class="card span4"><h2>Plano diário JIT</h2><label>Dia</label><input id="planDate" type="date"><button id="plan" style="width:100%;margin-top:10px">Reservar os 3 slots</button><div class="notice">Reservar não gasta IA. Cada post é criado pouco antes do horário correto.</div><div id="plans" style="margin-top:10px"></div></section>
-<section class="card span4"><h2>Loja Shopee</h2><div class="row"><div><div class="meta">Confirmados</div><b class="ok" id="verifiedProducts">0</b></div><div><div class="meta">Com link</div><b id="linkedProducts">0</b></div></div><div class="notice" id="lastSync">Última sincronização: nunca</div><button id="syncShopee" style="width:100%;margin-top:10px">Buscar candidatos na Shopee</button><div class="notice">Itens novos entram inativos e precisam ser confirmados uma vez antes da automação.</div></section>
-<section class="card span4"><h2>Novo produto</h2><form id="productForm"><label>Nome</label><input name="name" required><div class="row"><div><label>Categoria</label><input name="category"></div><div><label>Preço</label><input name="price"></div></div><label>Descrição factual</label><textarea name="description"></textarea><label>Link Shopee</label><input name="shopeeUrl" placeholder="https://shopee.com.br/..."><label>Foto real</label><input name="image" type="file" accept="image/jpeg,image/png,image/webp"><label>ou URL HTTPS da imagem</label><input name="imageUrl"><button style="width:100%;margin-top:10px">Adicionar produto</button></form></section>
-<section class="card span4"><h2>Venda avulsa</h2><label>Produto confirmado</label><select id="productSelect"></select><button id="generate" style="width:100%;margin-top:10px">Criar venda com arte</button><div class="notice">A IA cria a copy sem URL; o servidor acrescenta o link oficial deterministicamente.</div></section>
-<section class="card span4"><h2>Saúde das automações</h2><div class="health-grid" id="health"></div></section>
-<section class="card span6"><h2>Catálogo</h2><div id="products"></div></section>
-<section class="card span6"><h2>Auditoria recente</h2><div id="audit" class="audit"></div></section>
-<section class="card span12"><h2>Fila e histórico recente</h2><div id="posts"></div></section>
-</div></div><div class="toast" id="toast"></div>
-<script>
-let state={products:[],posts:[],plans:[],audit:[],health:{}};let statusState={};let replaceImageProductId=null;const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t._timer);t._timer=setTimeout(()=>t.style.display='none',4300)}
-async function api(url,opt={}){const r=await fetch(url,{...opt,credentials:'same-origin'});const j=await r.json().catch(()=>({}));if(r.status===401&&url!='/api/login'){showLogin();throw new Error('Faça login para continuar.')}if(!r.ok)throw new Error(j.error||'Erro');return j}
-function showLogin(){$('#loginOverlay').style.display='flex';setTimeout(()=>$('#password').focus(),50)}function hideLogin(){$('#loginOverlay').style.display='none';$('#loginError').textContent=''}
-async function authCheck(){try{const s=await api('/api/auth/status');if(!s.configured){showLogin();$('#loginError').textContent='APP_PASSWORD não configurada.';return false}if(!s.authenticated){showLogin();return false}hideLogin();return true}catch{return false}}
-$('#loginForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('#password').value})});$('#password').value='';hideLogin();await load()}catch(err){$('#loginError').textContent=err.message}});$('#logout').onclick=async()=>{await api('/api/logout',{method:'POST'}).catch(()=>{});showLogin()};
-function dateBR(iso){return iso?new Date(iso).toLocaleString('pt-BR',{timeZone:statusState.timezone||'America/Sao_Paulo'}):'—'}function imageFor(x){return x.mediaUrl||x.imageUrl||''}function typeLabel(t){return({sale:'Venda Shopee',hype:'Hype',growth:'Crescimento'})[t]||t||'Manual'}
-function renderMeta(m){if(!m?.configured)return '<span class="no">Meta não configurada</span>';if(!m.valid)return `<span class="no">Token/Página inválido: ${esc(m.reason||'falha')}</span>`;return `<b class="ok">${esc(m.pageName||m.pageId)}</b> · token válido ${m.canCreateContent===true?'· CREATE_CONTENT':''}`}
-async function load(){if(!await authCheck())return;try{const b=await api('/api/bootstrap');statusState=b.status;state=b.data;renderAll()}catch(e){toast(e.message)}}
-function renderAll(){const s=statusState;$('#nProducts').textContent=s.counts.products;$('#nPosts').textContent=s.counts.posts;$('#nPending').textContent=s.counts.pending;$('#copyUsage').textContent=s.usage?.copy||0;$('#webUsage').textContent=s.usage?.web||0;$('#failUsage').textContent=s.usage?.failures||0;$('#conn').innerHTML=`IA <b class="${s.openai?'ok':'no'}">${s.openai?'OK':'OFF'}</b> · Meta <b class="${s.meta?.valid?'ok':'no'}">${s.meta?.valid?'OK':'OFF'}</b> · Auto ${s.autoPublish?'ON':'OFF'}`;$('#tz').textContent=`${s.timezone} · ${s.plannerSlots.join(' / ')} · Plano ${s.autoPlan?'automático':'manual'} · Aprovação ${s.autoApprovePlanner?'automática':'manual'}`;$('#metaBox').innerHTML=renderMeta(s.meta);$('#linkedProducts').textContent=s.shopee?.linkedProducts||0;$('#verifiedProducts').textContent=s.shopee?.verifiedProducts||0;$('#lastSync').textContent='Última sincronização: '+(s.shopee?.lastSync?.checkedAt?dateBR(s.shopee.lastSync.checkedAt):'nunca');renderPlans();renderProducts();renderPosts();renderAudit();renderHealth();const sellable=state.products.filter(p=>p.active&&p.verified&&p.shopeeUrl);$('#productSelect').innerHTML=sellable.length?sellable.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join(''):'<option value="">Nenhum produto confirmado</option>'}
-function renderPlans(){const types=['sale','hype','growth'];$('#plans').innerHTML=state.plans.length?state.plans.map(plan=>`<div class="item"><b>${esc(plan.date)}</b>${types.map(t=>{const x=plan.slots?.[t]||{};return `<div class="plan-row"><span class="badge ${t}">${esc((x.scheduledAt?new Date(x.scheduledAt).toLocaleTimeString('pt-BR',{timeZone:statusState.timezone,hour:'2-digit',minute:'2-digit'}):''))}</span><span>${esc(typeLabel(t))}${x.lastError?`<div class="meta no">${esc(x.lastError)}</div>`:''}</span><span class="badge ${esc(x.state||'planned')}">${esc(x.state||'planned')}</span></div>`}).join('')}</div>`).join(''):'<div class="notice">Nenhum plano reservado para hoje/amanhã.</div>'}
-function productButtons(p){return `<div class="row" style="margin-top:9px"><button class="alt small" data-action="edit-product" data-id="${esc(p.id)}">Editar</button><button class="alt small" data-action="image-product" data-id="${esc(p.id)}">Foto</button>${!p.verified&&p.shopeeUrl?`<button class="small" data-action="confirm-product" data-id="${esc(p.id)}">Confirmar</button>`:''}<button class="alt small" data-action="toggle-product" data-id="${esc(p.id)}" data-active="${p.active?'1':'0'}">${p.active?'Pausar':'Ativar'}</button><button class="danger small" data-action="delete-product" data-id="${esc(p.id)}">Excluir</button></div>`}
-function renderProducts(){$('#products').innerHTML=state.products.length?state.products.map(p=>`<div class="item">${imageFor(p)?`<img class="product-media" src="${esc(imageFor(p))}" alt="">`:''}<strong>${esc(p.name)}</strong> ${p.verified?'<span class="badge ready">confirmado</span>':'<span class="badge warn">revisar</span>'}<div class="meta">${esc(p.category||'sem categoria')} ${p.price?'· '+esc(p.price):p.observedPrice?'· observado '+esc(p.observedPrice):''} · ${esc(p.source||'manual')}</div>${p.shopeeUrl?`<div class="meta shop-link"><a href="${esc(p.shopeeUrl)}" target="_blank" rel="noreferrer">Abrir Shopee ↗</a></div>`:'<div class="meta warn">Sem link Shopee</div>'}<div class="meta">Score produto: ${Number(p.performanceScore||0).toFixed(1)} · último post ${p.lastPostedAt?dateBR(p.lastPostedAt):'nunca'}</div>${productButtons(p)}<div style="clear:both"></div></div>`).join(''):'<div class="notice">Nenhum produto.</div>'}
-function scoreClass(q){const n=Number(q?.score||0);return n>=85?'good':n>=70?'mid':'bad'}
-function postActions(p){if(['published','publishing','cancelled','needs_review'].includes(p.status))return '';return `<div class="row" style="margin-top:9px">${['draft','error'].includes(p.status)?`<button class="alt" data-action="save-post" data-id="${esc(p.id)}">Salvar</button><button class="alt" data-action="approve-post" data-id="${esc(p.id)}">Aprovar</button>`:''}${p.status==='approved'?`<button data-action="publish-post" data-id="${esc(p.id)}">Publicar agora</button>`:''}<button class="danger" data-action="cancel-post" data-id="${esc(p.id)}">Cancelar</button></div>`}
-function renderPosts(){const posts=state.posts;$('#posts').innerHTML=posts.length?posts.map(p=>`<div class="item"><div class="row"><strong>${esc(p.productName||p.topic||typeLabel(p.plannerType))}</strong><span class="badge ${esc(p.plannerType||'')}">${esc(typeLabel(p.plannerType))}</span><span class="badge ${esc(p.status)}">${esc(p.status)}</span></div>${imageFor(p)?`<img class="media" src="${esc(imageFor(p))}" alt="Prévia">`:''}<div class="copy" contenteditable="${['draft','error'].includes(p.status)}" id="copy-${esc(p.id)}">${esc(p.message)}</div>${p.plannerType==='sale'&&p.shopeeUrl?`<div class="det-link">🛒 Veja o produto na Shopee:<br>${esc(p.shopeeUrl)}</div>`:''}<div class="quality"><span>Quality Gate:</span><span class="score ${scoreClass(p.quality)}">${Number(p.quality?.score||0)}/100</span>${(p.quality?.blockers||[]).map(x=>`<span class="badge error">${esc(x)}</span>`).join('')}${(p.quality?.warnings||[]).map(x=>`<span class="badge approved">${esc(x)}</span>`).join('')}</div>${p.performance?`<div class="meta">Performance: ${p.performance.reactions} reações · ${p.performance.comments} comentários · ${p.performance.shares} compartilhamentos · score ${p.performance.score}</div>`:''}<div class="meta">Criado ${dateBR(p.createdAt)} ${p.scheduledAt?'· programado '+dateBR(p.scheduledAt):''}</div>${p.error?`<div class="notice no">${esc(p.error)}</div>`:''}${postActions(p)}</div>`).join(''):'<div class="notice">Nenhum post.</div>'}
-function renderAudit(){$('#audit').innerHTML=(state.audit||[]).length?state.audit.map(x=>`<div class="item"><b>${esc(x.type)}</b><div class="meta">${dateBR(x.at)}</div><div class="notice">${esc(JSON.stringify(x.data||{}).slice(0,420))}</div></div>`).join(''):'<div class="notice">Sem eventos ainda.</div>'}
-function renderHealth(){const entries=Object.entries(state.health||{});$('#health').innerHTML=entries.length?entries.map(([k,v])=>`<div class="health-item"><b>${esc(k)}</b><div class="${v.ok?'ok':'no'}">${v.ok?'OK':'ERRO'}</div><div class="meta">${dateBR(v.at)}</div></div>`).join(''):'<div class="notice">Aguardando primeiras execuções.</div>'}
-$('#productForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/products',{method:'POST',body:new FormData(e.target)});e.target.reset();toast('Produto adicionado.');load()}catch(err){toast(err.message)}})
-$('#generate').onclick=async()=>{const productId=$('#productSelect').value;if(!productId)return toast('Nenhum produto confirmado.');try{$('#generate').disabled=true;await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({productId})});toast('Venda criada com arte e Quality Gate.');load()}catch(e){toast(e.message)}finally{$('#generate').disabled=false}}
-$('#plan').onclick=async()=>{const date=$('#planDate').value;if(!date)return toast('Escolha o dia.');try{await api('/api/planner/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({date})});toast('Plano reservado. A IA será chamada perto de cada horário.');load()}catch(e){toast(e.message)}}
-$('#syncShopee').onclick=async()=>{if(!confirm('Buscar candidatos na loja? Novos itens não serão ativados automaticamente.'))return;try{$('#syncShopee').disabled=true;const r=await api('/api/shopee/sync',{method:'POST'});toast(`${r.found} encontrados · ${r.created} candidatos novos · ${r.updated} atualizados.`);load()}catch(e){toast(e.message)}finally{$('#syncShopee').disabled=false}}
-$('#validateMeta').onclick=async()=>{try{const m=await api('/api/meta/validate',{method:'POST'});toast(m.valid?'Meta validada.':'Meta com problema.');load()}catch(e){toast(e.message)}};$('#refreshPerformance').onclick=async()=>{try{const r=await api('/api/performance/refresh',{method:'POST'});toast(`${r.refreshed} posts atualizados.`);load()}catch(e){toast(e.message)}}
-$('#products').addEventListener('click',async e=>{const b=e.target.closest('button[data-action]');if(!b)return;const id=b.dataset.id;const p=state.products.find(x=>x.id===id);if(!p)return;try{if(b.dataset.action==='edit-product'){const f=$('#editProductForm');f.id.value=p.id;f.name.value=p.name||'';f.category.value=p.category||'';f.price.value=p.price||'';f.description.value=p.description||'';f.shopeeUrl.value=p.shopeeUrl||'';f.imageUrl.value=p.imageUrl||'';$('#productDialog').showModal()}else if(b.dataset.action==='image-product'){replaceImageProductId=id;$('#replaceImageInput').click()}else if(b.dataset.action==='confirm-product'){await api(`/api/products/${id}/confirm`,{method:'POST'});toast('Produto confirmado para automação.');load()}else if(b.dataset.action==='toggle-product'){await api(`/api/products/${id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({active:b.dataset.active!=='1'})});load()}else if(b.dataset.action==='delete-product'){if(confirm('Excluir produto?')){await api(`/api/products/${id}`,{method:'DELETE'});load()}}}catch(err){toast(err.message)}})
-$('#editProductForm').addEventListener('submit',async e=>{e.preventDefault();if(e.submitter?.value!=='save'){e.target.closest('dialog').close();return}const f=new FormData(e.target);const id=f.get('id');try{await api(`/api/products/${id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({name:f.get('name'),category:f.get('category'),price:f.get('price'),description:f.get('description'),shopeeUrl:f.get('shopeeUrl'),imageUrl:f.get('imageUrl')})});$('#productDialog').close();toast('Produto atualizado. Se o link mudou, confirme novamente.');load()}catch(err){toast(err.message)}})
-$('#replaceImageInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file||!replaceImageProductId)return;const fd=new FormData();fd.append('image',file);try{await api(`/api/products/${replaceImageProductId}/image`,{method:'POST',body:fd});toast('Foto atualizada.');load()}catch(err){toast(err.message)}finally{e.target.value='';replaceImageProductId=null}})
-$('#posts').addEventListener('click',async e=>{const b=e.target.closest('button[data-action]');if(!b)return;const id=b.dataset.id;const p=state.posts.find(x=>x.id===id);if(!p)return;try{if(b.dataset.action==='save-post'){await api(`/api/posts/${id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({message:$(`#copy-${id}`).innerText})})}else if(b.dataset.action==='approve-post'){await api(`/api/posts/${id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({message:$(`#copy-${id}`).innerText,status:'approved'})});toast('Post aprovado.')}else if(b.dataset.action==='publish-post'){if(confirm('Publicar agora?')){await api(`/api/posts/${id}/publish`,{method:'POST'});toast('Publicado.')}}else if(b.dataset.action==='cancel-post'){if(confirm('Cancelar este post e o slot diário?'))await api(`/api/posts/${id}`,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({status:'cancelled'})})}load()}catch(err){toast(err.message)}})
-(function init(){const now=new Date();const local=new Date(now.toLocaleString('en-US',{timeZone:'America/Sao_Paulo'}));$('#planDate').value=`${local.getFullYear()}-${String(local.getMonth()+1).padStart(2,'0')}-${String(local.getDate()).padStart(2,'0')}`})();load();
-</script></body></html>
+<body class="is-loading">
+  <div class="login-overlay" id="loginOverlay" aria-hidden="true">
+    <form class="login-box" id="loginForm">
+      <div class="login-mark" aria-hidden="true">AG</div>
+      <p class="eyebrow">CENTRAL ANIMACA GEEK</p>
+      <h1>Entre para gerenciar o agente</h1>
+      <p class="muted">Acesso protegido. Suas credenciais ficam fora do navegador.</p>
+      <label for="password">Senha</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button class="btn primary full" type="submit">Entrar</button>
+      <div class="form-error" id="loginError" role="alert"></div>
+    </form>
+  </div>
+
+  <dialog id="productDialog" class="modal">
+    <form method="dialog" id="editProductForm">
+      <div class="modal-head"><div><p class="eyebrow">CATÁLOGO</p><h2>Editar produto</h2></div><button class="icon-btn" value="cancel" aria-label="Fechar">×</button></div>
+      <input type="hidden" name="id">
+      <div class="form-grid two"><div><label>Nome</label><input name="name" required></div><div><label>Categoria</label><input name="category"></div></div>
+      <div class="form-grid two"><div><label>Preço</label><input name="price"></div><div><label>Link específico da Shopee</label><input name="shopeeUrl"></div></div>
+      <label>Descrição factual</label><textarea name="description"></textarea>
+      <label>URL pública da imagem</label><input name="imageUrl">
+      <div class="modal-actions"><button value="cancel" class="btn ghost">Cancelar</button><button value="save" class="btn primary">Salvar alterações</button></div>
+    </form>
+  </dialog>
+  <input id="replaceImageInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Navegação principal">
+      <div class="brand-lockup"><div class="brand-mark">AG</div><div><strong>Animaca Geek</strong><span>Central do Agente</span></div></div>
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="today"><span>◉</span><b>Hoje</b></button>
+        <button class="nav-item" data-view="content"><span>✦</span><b>Conteúdo</b></button>
+        <button class="nav-item" data-view="products"><span>▦</span><b>Produtos</b></button>
+        <button class="nav-item" data-view="automation"><span>↻</span><b>Automação</b></button>
+        <button class="nav-item" data-view="metrics"><span>↗</span><b>Métricas</b></button>
+        <button class="nav-item" data-view="system"><span>⚙</span><b>Sistema</b></button>
+      </nav>
+      <div class="sidebar-foot"><span class="version-chip">v0.6</span><button class="btn ghost compact" id="logout">Sair</button></div>
+    </aside>
+
+    <div class="main-shell">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Abrir menu">☰</button>
+        <div><p class="eyebrow" id="viewEyebrow">OPERAÇÃO DIÁRIA</p><h1 id="viewTitle">Hoje</h1></div>
+        <div class="top-actions">
+          <div class="connection-pill" id="connectionPill"><span class="dot"></span><span>Carregando</span></div>
+          <button class="btn ghost compact" id="reload">Atualizar</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="view active" data-view-panel="today">
+          <div class="hero-card">
+            <div><p class="eyebrow">PRÓXIMA AÇÃO</p><h2 id="nextActionTitle">Carregando o plano de hoje…</h2><p class="hero-copy" id="nextActionCopy">A Central está verificando os três horários.</p></div>
+            <div class="hero-side"><span class="countdown-label">Próximo evento</span><strong id="nextActionTime">—</strong><span id="nextActionState" class="status neutral">Aguardando</span></div>
+          </div>
+
+          <div class="automation-strip" id="automationStrip">
+            <div><span>Planejamento</span><strong id="autoPlanState">—</strong></div>
+            <div><span>Aprovação</span><strong id="autoApproveState">—</strong></div>
+            <div><span>Publicação</span><strong id="autoPublishState">—</strong></div>
+          </div>
+
+          <div class="section-head"><div><p class="eyebrow">AGENDA</p><h2>Hoje na Animaca Geek</h2></div><button class="btn ghost" id="reserveToday">Reservar plano de hoje</button></div>
+          <div class="timeline-grid" id="todayTimeline"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
+
+          <div class="dashboard-grid">
+            <article class="panel span-7"><div class="panel-head"><div><p class="eyebrow">PRONTOS PARA REVISÃO</p><h2>O que precisa de você</h2></div><span class="big-number" id="pendingCount">0</span></div><div id="attentionPosts" class="stack"></div></article>
+            <article class="panel span-5"><div class="panel-head"><div><p class="eyebrow">EFICIÊNCIA</p><h2>Uso de IA hoje</h2></div></div><div id="aiUsage" class="usage-list"></div></article>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="content">
+          <div class="section-head"><div><p class="eyebrow">LABORATÓRIO</p><h2>Testar conteúdo agora</h2><p class="muted">Os testes nascem como rascunho. Nada é publicado automaticamente.</p></div></div>
+          <div class="test-grid">
+            <article class="test-card sale"><span class="test-icon">🛍</span><h3>Venda Shopee</h3><p>Usa produto real, foto cadastrada, link oficial e Creative Engine v2.</p><select id="productSelect"></select><button class="btn primary full" data-test-content="sale">Criar teste de venda</button></article>
+            <article class="test-card hype"><span class="test-icon">⚡</span><h3>Hype do momento</h3><p>Pesquisa assunto geek recente, checa confiança e cria arte nova.</p><button class="btn secondary full" data-test-content="hype">Pesquisar e criar hype</button></article>
+            <article class="test-card growth"><span class="test-icon">💬</span><h3>Crescimento</h3><p>Cria conversa pensada para comentários e compartilhamentos.</p><button class="btn secondary full" data-test-content="growth">Criar post de crescimento</button></article>
+          </div>
+
+          <div class="section-head spaced"><div><p class="eyebrow">CONTEÚDO</p><h2>Fila e histórico</h2></div><div class="filters"><select id="postTypeFilter"><option value="all">Todos os tipos</option><option value="sale">Venda</option><option value="hype">Hype</option><option value="growth">Crescimento</option></select><select id="postStatusFilter"><option value="all">Todos os estados</option><option value="draft">Rascunho</option><option value="approved">Aprovado</option><option value="published">Publicado</option><option value="needs_review">Revisar</option><option value="error">Erro</option><option value="cancelled">Cancelado</option></select></div></div>
+          <div id="posts" class="post-list"></div>
+        </section>
+
+        <section class="view" data-view-panel="products">
+          <div class="dashboard-grid">
+            <article class="panel span-7"><div class="panel-head"><div><p class="eyebrow">LOJA SHOPEE</p><h2>Catálogo conhecido pelo agente</h2></div><button class="btn secondary" id="syncShopee">Buscar candidatos</button></div><div class="metric-row"><div><span>Prontos</span><strong id="verifiedProducts">0</strong></div><div><span>Com link</span><strong id="linkedProducts">0</strong></div><div><span>Última busca</span><strong class="small-value" id="lastSync">Nunca</strong></div></div><div class="callout">Produtos encontrados automaticamente entram para revisão. Só ficam elegíveis para venda depois de link, foto e confirmação.</div></article>
+            <article class="panel span-5"><p class="eyebrow">NOVO PRODUTO</p><h2>Cadastro manual</h2><form id="productForm" class="form-stack"><input name="name" placeholder="Nome do produto" aria-label="Nome do produto" required><div class="form-grid two"><input name="category" placeholder="Categoria" aria-label="Categoria"><input name="price" placeholder="Preço" aria-label="Preço"></div><textarea name="description" placeholder="Descrição factual" aria-label="Descrição factual"></textarea><input name="shopeeUrl" placeholder="Link do produto na Shopee" aria-label="Link Shopee"><label class="file-field">Foto real<input name="image" type="file" accept="image/jpeg,image/png,image/webp"></label><input name="imageUrl" placeholder="Ou URL HTTPS da imagem" aria-label="URL da imagem"><button class="btn primary full">Adicionar produto</button></form></article>
+          </div>
+          <div class="section-head spaced"><div><p class="eyebrow">CATÁLOGO</p><h2>Produtos</h2></div><div class="filters grow"><input id="productSearch" type="search" placeholder="Buscar produto…"><select id="productFilter"><option value="all">Todos</option><option value="ready">Prontos</option><option value="review">Revisar</option><option value="paused">Pausados</option><option value="no-photo">Sem foto</option><option value="no-link">Sem Shopee</option></select></div></div>
+          <div id="products" class="product-grid"></div>
+        </section>
+
+        <section class="view" data-view-panel="automation">
+          <div class="section-head"><div><p class="eyebrow">ESTRATÉGIA</p><h2>Três motores, três objetivos</h2></div></div>
+          <div class="timeline-grid static"><article class="slot-card sale"><span class="slot-time">10:00</span><h3>Venda Shopee</h3><p>Produto elegível, foto real, rotação e performance.</p></article><article class="slot-card hype"><span class="slot-time">15:00</span><h3>Hype do momento</h3><p>Pesquisa just-in-time, confiança e temas sensíveis bloqueados.</p></article><article class="slot-card growth"><span class="slot-time">20:00</span><h3>Crescimento</h3><p>Formato orientado pelo que já gerou interação.</p></article></div>
+          <div class="dashboard-grid spaced"><article class="panel span-7"><div class="panel-head"><div><p class="eyebrow">PLANO</p><h2>Hoje e amanhã</h2></div><div class="inline-form"><input id="planDate" type="date"><button class="btn primary" id="plan">Reservar</button></div></div><div id="plans"></div></article><article class="panel span-5"><p class="eyebrow">SAÚDE</p><h2>Rotinas automáticas</h2><div id="health" class="health-list"></div></article></div>
+        </section>
+
+        <section class="view" data-view-panel="metrics">
+          <div class="section-head"><div><p class="eyebrow">APRENDIZADO</p><h2>O que está funcionando</h2><p class="muted">Performance é recalculada sem contar a mesma observação várias vezes.</p></div><button class="btn secondary" id="refreshPerformance">Atualizar métricas</button></div>
+          <div class="metric-cards" id="metricCards"></div>
+          <article class="panel spaced"><p class="eyebrow">PRODUTOS</p><h2>Ranking comercial</h2><div id="productRanking"></div></article>
+        </section>
+
+        <section class="view" data-view-panel="system">
+          <div class="dashboard-grid"><article class="panel span-5"><div class="panel-head"><div><p class="eyebrow">CONEXÕES</p><h2>Meta & OpenAI</h2></div><button class="btn secondary" id="validateMeta">Validar Meta</button></div><div id="metaBox" class="system-status"></div><div id="systemInfo" class="system-status"></div></article><article class="panel span-7"><p class="eyebrow">AUDITORIA</p><h2>Atividade recente</h2><div id="audit" class="audit-list"></div></article></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

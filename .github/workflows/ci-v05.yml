@@ -1,8 +1,8 @@
-name: CI Animaca Agent v0.5
+name: CI Animaca Agent
 
 on:
   push:
-    branches: [dev-v0.5]
+    branches: [main, 'dev-*']
   pull_request:
     branches: [main]
 
@@ -21,3 +21,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run check
       - run: npm test
+      - name: Verificar frontend sem inline inseguro
+        run: |
+          ! grep -R "<script>" public/index.html
+          ! grep -R "style=\"" public/index.html public/app.js

@@ -1,8 +1,8 @@
 import {
   SESSION_COOKIE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
   bootstrapSummary, createProduct, updateProduct, updateProductImage, confirmProduct, deleteProduct,
-  generateManualSale, patchPost, generatePlan, syncShopeeCatalog, validateMetaConnection,
-  publishById, getMedia, refreshRecentPerformance
+  generateManualSale, generateManualType, regeneratePostCreative, patchPost, generatePlan, syncShopeeCatalog, validateMetaConnection,
+  publishById, resolvePostReview, getMedia, refreshRecentPerformance
 } from '../lib/agent.mjs';
 
 const baseHeaders = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
@@ -110,8 +110,19 @@ export default async (req, context) => {
       return json(await generateManualSale(body.productId));
     }
 
+    if (route === '/generate/type' && method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      return json(await generateManualType(body.type, body.productId || null));
+    }
+
     const postMatch = route.match(/^\/posts\/([^/]+)$/);
     if (postMatch && method === 'PATCH') return json(await patchPost(postMatch[1], await req.json()));
+
+    const creativeMatch = route.match(/^\/posts\/([^/]+)\/creative$/);
+    if (creativeMatch && method === 'POST') { const body = await req.json().catch(() => ({})); return json(await regeneratePostCreative(creativeMatch[1], body.mode || 'template')); }
+
+    const reviewMatch = route.match(/^\/posts\/([^/]+)\/resolve-review$/);
+    if (reviewMatch && method === 'POST') { const body = await req.json().catch(() => ({})); return json(await resolvePostReview(reviewMatch[1], body.resolution)); }
 
     const pubMatch = route.match(/^\/posts\/([^/]+)\/publish$/);
     if (pubMatch && method === 'POST') return json(await publishById(pubMatch[1]));
