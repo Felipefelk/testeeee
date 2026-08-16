@@ -7,12 +7,14 @@ import { v4 as uuid } from 'uuid';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import { copyHasUrl, stripUrls, sensitiveReasons, moderateText, extractWebEvidence, buildImagePrompt, generateImageBuffer } from './creative-ai.mjs';
 
-export const TIMEZONE = process.env.TIMEZONE || 'America/Sao_Paulo';
+export const TIMEZONE = 'America/Sao_Paulo';
 export const SESSION_COOKIE = 'animaca_session';
 export const SHOPEE_STORE_URL = process.env.SHOPEE_STORE_URL || 'https://shopee.com.br/animacageek';
 const PUBLISH_LOCK_MS = 15 * 60 * 1000;
 const POST_INDEX_LIMIT = 120;
+const PRODUCT_INDEX_LIMIT = 1000;
 const SLOT_MAX_ATTEMPTS = 2;
 const SLOT_RETRY_MINUTES = 10;
 const PLAN_TYPES = ['sale', 'hype', 'growth'];
@@ -21,6 +23,7 @@ const productsStore = () => getStore({ name: 'animaca-products', consistency: 's
 const postsStore = () => getStore({ name: 'animaca-posts', consistency: 'strong' });
 const mediaStore = () => getStore({ name: 'animaca-media', consistency: 'strong' });
 const systemStore = () => getStore({ name: 'animaca-system', consistency: 'strong' });
+const jobsStore = () => getStore({ name: 'animaca-jobs', consistency: 'strong' });
 
 const nowIso = () => new Date().toISOString();
 const boolEnv = (name, fallback = false) => {
@@ -273,7 +276,7 @@ function compactPost(p) {
   const keys = [
     'id','productId','productName','message','imageUrl','mediaKey','imageMime','shopeeUrl','status','scheduledAt',
     'createdAt','updatedAt','publishedAt','metaPostId','error','errorCode','errorSubcode','lastAttemptAt','origin',
-    'plannerType','topic','dailyDate','quality','performance','generatedVisual'
+    'plannerType','topic','dailyDate','quality','performance','generatedVisual','visualMode','visualAiError','sources','hypeCheckedAt','hypeConfidence','moderation','sensitiveReasons'
   ];
   return Object.fromEntries(keys.map(k => [k, p[k] ?? null]));
 }
@@ -311,17 +314,64 @@ export async function listRecentPosts(limit = 60) {
   return (idx.items || []).slice(0, Math.max(1, Math.min(limit, POST_INDEX_LIMIT))).map(postView);
 }
 
-export async function listProducts() {
+function compactProduct(p) {
+  if (!p) return null;
+  return { ...p };
+}
+
+async function ensureProductIndex() {
+  const store = systemStore();
+  const existing = await store.get('indexes/products-v1', { type: 'json', consistency: 'strong' });
+  if (existing?.version === 1) return existing;
   const rows = await listJson(productsStore, 'product/');
-  return rows.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || String(b.createdAt).localeCompare(String(a.createdAt))).map(productView);
+  rows.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const index = { version: 1, totalProducts: rows.length, items: rows.slice(0, PRODUCT_INDEX_LIMIT).map(compactProduct), rebuiltAt: nowIso() };
+  const result = await store.setJSON('indexes/products-v1', index, { onlyIfNew: true });
+  if (result.modified) return index;
+  return await store.get('indexes/products-v1', { type: 'json', consistency: 'strong' }) || index;
+}
+
+async function indexProduct(product, { isNew = false } = {}) {
+  await ensureProductIndex();
+  return mutateSystemJson('indexes/products-v1', { version: 1, totalProducts: 0, items: [] }, idx => {
+    idx.version = 1;
+    idx.items = Array.isArray(idx.items) ? idx.items : [];
+    const found = idx.items.findIndex(x => x.id === product.id);
+    if (found >= 0) idx.items.splice(found, 1);
+    idx.items.unshift(compactProduct(product));
+    idx.items.sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    idx.items = idx.items.slice(0, PRODUCT_INDEX_LIMIT);
+    if (isNew && found < 0) idx.totalProducts = Number(idx.totalProducts || 0) + 1;
+    idx.updatedAt = nowIso();
+    return idx;
+  });
+}
+
+export async function listProducts() {
+  const idx = await ensureProductIndex();
+  return (idx.items || []).map(productView);
+}
+
+export function productFreshnessState(p, nowMs = Date.now(), maxDays = 14) {
+  if (!p?.shopeeUrl || !p?.verified) return { fresh: false, state: 'not-ready', ageDays: null };
+  if (maxDays <= 0) return { fresh: true, state: 'unchecked', ageDays: null };
+  const reference = p.lastSyncSeenAt || p.verifiedAt || p.createdAt;
+  const parsed = Date.parse(reference || 0);
+  if (!parsed) return { fresh: false, state: 'unknown', ageDays: null };
+  const ageDays = Math.max(0, (nowMs - parsed) / 86400_000);
+  const missing = Number(p.missingSyncCount || 0);
+  const fresh = ageDays <= maxDays && missing < 2;
+  return { fresh, state: fresh ? (missing ? 'attention' : 'fresh') : 'stale', ageDays: Number(ageDays.toFixed(1)) };
 }
 
 export function productView(p) {
   if (!p) return null;
+  const freshness = productFreshnessState(p, Date.now(), intEnv('PRODUCT_MAX_STALE_DAYS', 14));
   return {
     ...p,
     shopeeUrl: p.shopeeUrl || '', source: p.source || 'manual', verified: Boolean(p.verified),
-    mediaUrl: p.mediaKey ? `/media/${encodeURIComponent(p.mediaKey)}` : ''
+    mediaUrl: p.mediaKey ? `/media/${encodeURIComponent(p.mediaKey)}` : '',
+    catalogFresh: freshness.fresh, catalogState: freshness.state, catalogAgeDays: freshness.ageDays
   };
 }
 
@@ -381,7 +431,7 @@ async function casProduct(id, mutate, retries = 5) {
     if (!entry) return null;
     const next = await mutate(structuredClone(entry.data));
     const result = await store.setJSON(`product/${id}`, next, { onlyIfMatch: entry.etag });
-    if (result.modified) return productView(next);
+    if (result.modified) { await indexProduct(next).catch(err => console.error('[product-index]', err)); return productView(next); }
   }
   return null;
 }
@@ -396,6 +446,27 @@ export async function persistSafeImage(file) {
   }
   const output = await sharp(bytes, { failOn: 'error' }).rotate().resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true }).webp({ quality: 88 }).toBuffer();
   return saveGeneratedMedia(output, { mime: 'image/webp', source: 'upload' });
+}
+
+async function persistRemoteImageUrl(raw) {
+  const url = validateHttpsUrl(raw, { optional: false });
+  const { response } = await fetchPublicHttps(url, { headers: { accept: 'image/avif,image/webp,image/png,image/jpeg,image/*' }, timeout: 9000 });
+  if (!response.ok) throw new Error(`Não foi possível baixar a imagem externa (HTTP ${response.status}).`);
+  const bytes = await readResponseLimited(response);
+  const detected = await fileTypeFromBuffer(bytes);
+  if (!detected || !['image/jpeg', 'image/png', 'image/webp'].includes(detected.mime)) throw new Error('A URL informada não retornou uma imagem JPEG, PNG ou WEBP válida.');
+  const output = await sharp(bytes, { failOn: 'error' }).rotate().resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true }).webp({ quality: 88 }).toBuffer();
+  return saveGeneratedMedia(output, { mime: 'image/webp', source: 'remote-import', originalUrl: url.slice(0, 500) });
+}
+
+async function mediaExists(key) {
+  if (!key) return false;
+  try {
+    const entry = await mediaStore().getWithMetadata(String(key), { type: 'blob', consistency: 'strong' });
+    return Boolean(entry?.data && Number(entry.data.size || 0) > 0);
+  } catch {
+    return false;
+  }
 }
 
 async function saveGeneratedMedia(buffer, metadata = {}) {
@@ -415,33 +486,35 @@ export async function getMedia(key) {
 export async function createProduct({ name, category = '', price = '', description = '', imageUrl = '', shopeeUrl = '', file = null, source = 'manual' }) {
   const cleanName = String(name || '').trim();
   if (!cleanName) throw new Error('Nome do produto é obrigatório.');
-  const saved = await persistSafeImage(file);
-  const publicImage = validateHttpsUrl(imageUrl);
+  const saved = file ? await persistSafeImage(file) : (String(imageUrl || '').trim() ? await persistRemoteImageUrl(imageUrl) : null);
   const link = await normalizeShopeeUrl(shopeeUrl);
   if (link) {
     const duplicate = (await listProducts()).find(p => p.shopeeUrl === link);
     if (duplicate) { const e = new Error(`Este link da Shopee já pertence ao produto “${duplicate.name}”.`); e.status = 409; throw e; }
   }
   const now = nowIso();
+  const ready = Boolean(link && saved?.mediaKey);
   const p = {
     id: uuid(), name: cleanName, category: String(category || '').trim(), price: String(price || '').trim(),
-    description: String(description || '').trim(), imageUrl: publicImage, shopeeUrl: link,
+    description: String(description || '').trim(), imageUrl: '', shopeeUrl: link,
     mediaKey: saved?.mediaKey || '', imageMime: saved?.imageMime || '', active: true, source,
-    verified: Boolean(link && (saved?.mediaKey || publicImage)), verifiedAt: link && (saved?.mediaKey || publicImage) ? now : null, observedPrice: '', lastSyncSeenAt: null,
-    lastPostedAt: null, performanceScore: 0, createdAt: now, updatedAt: null
+    verified: ready, verifiedAt: ready ? now : null, observedPrice: '', lastSyncSeenAt: null, lastCatalogCheckAt: now,
+    missingSyncCount: 0, catalogStatus: ready ? 'confirmed' : 'review', lastPostedAt: null, performanceScore: 0, createdAt: now, updatedAt: null
   };
   const result = await productsStore().setJSON(`product/${p.id}`, p, { onlyIfNew: true });
   if (!result.modified) throw new Error('Não foi possível cadastrar o produto.');
+  await indexProduct(p, { isNew: true }).catch(err => console.error('[product-index]', err));
   return productView(p);
 }
 
 export async function updateProduct(id, body) {
+  const remoteSaved = ('imageUrl' in body && String(body.imageUrl || '').trim()) ? await persistRemoteImageUrl(body.imageUrl) : null;
   const updated = await casProduct(id, async current => {
     if ('name' in body) { const n = String(body.name || '').trim(); if (!n) throw new Error('Nome é obrigatório.'); current.name = n; }
     if ('category' in body) current.category = String(body.category || '').trim();
     if ('price' in body) current.price = String(body.price || '').trim();
     if ('description' in body) current.description = String(body.description || '').trim();
-    if ('imageUrl' in body) current.imageUrl = validateHttpsUrl(body.imageUrl);
+    if (remoteSaved) { current.mediaKey = remoteSaved.mediaKey; current.imageMime = remoteSaved.imageMime; current.imageUrl = ''; }
     if ('shopeeUrl' in body) {
       const nextUrl = await normalizeShopeeUrl(body.shopeeUrl);
       if (nextUrl !== (current.shopeeUrl || '')) {
@@ -452,6 +525,8 @@ export async function updateProduct(id, body) {
         current.shopeeUrl = nextUrl;
         current.verified = false;
         current.verifiedAt = null;
+        current.missingSyncCount = 0;
+        current.catalogStatus = 'review';
       }
     }
     if ('active' in body) current.active = parseBooleanInput(body.active);
@@ -465,7 +540,7 @@ export async function updateProduct(id, body) {
 export async function updateProductImage(id, file) {
   const saved = await persistSafeImage(file);
   if (!saved) throw new Error('Envie uma imagem válida.');
-  const updated = await casProduct(id, p => ({ ...p, mediaKey: saved.mediaKey, imageMime: saved.imageMime, updatedAt: nowIso() }));
+  const updated = await casProduct(id, p => ({ ...p, mediaKey: saved.mediaKey, imageMime: saved.imageMime, imageUrl: '', updatedAt: nowIso() }));
   if (!updated) throw new Error('Produto não encontrado.');
   return updated;
 }
@@ -476,7 +551,7 @@ export async function confirmProduct(id) {
     if (!p.mediaKey && !p.imageUrl) throw new Error('Adicione uma foto real antes de confirmar o produto.');
     return {
       ...p,
-      price: p.price || p.observedPrice || '', active: true, verified: true, verifiedAt: nowIso(), updatedAt: nowIso()
+      price: p.price || p.observedPrice || '', active: true, verified: true, verifiedAt: nowIso(), lastCatalogCheckAt: nowIso(), missingSyncCount: 0, catalogStatus: 'confirmed', updatedAt: nowIso()
     };
   });
   if (!updated) throw new Error('Produto não encontrado.');
@@ -487,13 +562,13 @@ export async function deleteProduct(id) {
   const p = await getProduct(id);
   if (!p) return false;
   await productsStore().delete(`product/${id}`);
-  // Mantemos a mídia: posts históricos podem referenciá-la. Limpeza é feita por rotina separada futura.
+  await mutateSystemJson('indexes/products-v1', { version: 1, totalProducts: 0, items: [] }, idx => { idx.items = (idx.items || []).filter(x => x.id !== id); idx.totalProducts = Math.max(0, Number(idx.totalProducts || 1) - 1); idx.updatedAt = nowIso(); return idx; }).catch(() => {});
   return { ok: true, mediaPreserved: Boolean(p.mediaKey) };
 }
 
 function openAIClient() {
   if (!process.env.OPENAI_API_KEY) throw new Error('Configure OPENAI_API_KEY no Netlify.');
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 24000, maxRetries: 0 });
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 45000, maxRetries: 0 });
 }
 
 async function consumeAiBudget(kind) {
@@ -501,10 +576,11 @@ async function consumeAiBudget(kind) {
   const limits = {
     copy: intEnv('AI_DAILY_COPY_LIMIT', 8),
     web: intEnv('AI_DAILY_WEB_LIMIT', 4),
-    sync: intEnv('AI_DAILY_SYNC_LIMIT', 1)
+    sync: intEnv('AI_DAILY_SYNC_LIMIT', 1),
+    image: intEnv('AI_DAILY_IMAGE_LIMIT', 6)
   };
   const limit = limits[kind] ?? 4;
-  return mutateSystemJson(`usage/${date}`, { date, copy: 0, web: 0, sync: 0, failures: 0 }, usage => {
+  return mutateSystemJson(`usage/${date}`, { date, copy: 0, web: 0, sync: 0, image: 0, failures: 0 }, usage => {
     usage[kind] = Number(usage[kind] || 0) + 1;
     if (usage[kind] > limit) {
       const e = new Error(`Limite diário de IA atingido para ${kind} (${limit}).`);
@@ -518,7 +594,7 @@ async function consumeAiBudget(kind) {
 
 async function markAiFailure() {
   const date = DateTime.now().setZone(TIMEZONE).toISODate();
-  await mutateSystemJson(`usage/${date}`, { date, copy: 0, web: 0, sync: 0, failures: 0 }, usage => {
+  await mutateSystemJson(`usage/${date}`, { date, copy: 0, web: 0, sync: 0, image: 0, failures: 0 }, usage => {
     usage.failures = Number(usage.failures || 0) + 1;
     usage.updatedAt = nowIso();
     return usage;
@@ -577,10 +653,10 @@ export async function generateSaleCaption(product) {
   if (!product?.shopeeUrl) throw new Error('O produto precisa ter link específico da Shopee.');
   const response = await aiResponse({
     kind: 'copy',
-    model: process.env.OPENAI_COPY_MODEL || 'gpt-5-mini',
+    model: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna',
     input: salePrompt(product, await compactMemory())
   });
-  const message = response.output_text?.trim();
+  const message = stripUrls(response.output_text?.trim());
   if (!message) throw new Error('A IA não retornou a legenda de venda.');
   return { message, topic: product.name };
 }
@@ -588,29 +664,55 @@ export async function generateSaleCaption(product) {
 export async function generateGrowthPost() {
   const response = await aiResponse({
     kind: 'copy',
-    model: process.env.OPENAI_COPY_MODEL || 'gpt-5-mini',
+    model: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna',
     input: growthPrompt(await compactMemory(), await catalogDigest(), await performanceDigest())
   });
   const parsed = extractJson(response.output_text);
-  const message = String(parsed.message || '').trim();
+  const message = stripUrls(String(parsed.message || '').trim());
   if (!message) throw new Error('A IA não retornou o post de crescimento.');
   return { message, topic: String(parsed.topic || 'crescimento geek').slice(0, 100) };
 }
 
 export async function generateHypePost() {
-  const prompt = `Pesquise na web AGORA e encontre UM assunto dos últimos 3 dias com forte afinidade ao público geek brasileiro: anime, mangá, games, filmes/séries, trailers, lançamentos, eventos ou fandoms.\n\nCrie um post curto para a Animaca Geek aproveitar a conversa do momento, sem fingir que a loja vende um produto relacionado.\n\nRegras:\n- Confirme que é recente; se houver dúvida, escolha outro.\n- Evite política, tragédias, crimes, morte, boatos, conteúdo adulto e polêmicas sensíveis.\n- Não invente data, anúncio ou fato.\n- Não copie manchetes.\n- Não coloque links externos.\n- Termine com pergunta específica.\n- 2 a 4 hashtags.\n- Retorne JSON puro: {"topic":"assunto específico","confidence":0.0,"message":"texto final"}.\n- confidence deve refletir a segurança de que o assunto é realmente recente e adequado.\n\nMemória recente para não repetir:\n${await compactMemory() || 'sem posts recentes'}`;
+  const prompt = `Pesquise na web AGORA e encontre UM assunto dos últimos 3 dias com forte afinidade ao público geek brasileiro: anime, mangá, games, filmes/séries, trailers, lançamentos, eventos ou fandoms.
+
+Crie um post curto para a Animaca Geek aproveitar a conversa do momento, sem fingir que a loja vende um produto relacionado.
+
+Regras:
+- Confirme que é recente; se houver dúvida, escolha outro.
+- Evite política, tragédias, crimes, morte, boatos, conteúdo adulto, apostas, drogas e polêmicas sensíveis.
+- Não invente data, anúncio ou fato.
+- Não copie manchetes.
+- A mensagem pública NÃO deve conter URL.
+- Termine com pergunta específica.
+- 2 a 4 hashtags.
+- Retorne JSON puro: {"topic":"assunto específico","confidence":0.0,"message":"texto final","sources":[{"url":"https://...","title":"fonte","publishedAt":"ISO ou data conhecida"}]}.
+- confidence deve refletir a segurança de que o assunto é realmente recente e adequado.
+
+Memória recente para não repetir:
+${await compactMemory() || 'sem posts recentes'}`;
   const response = await aiResponse({
     kind: 'web',
-    model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5',
+    model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra',
     tools: [{ type: 'web_search' }], input: prompt
   });
   const parsed = extractJson(response.output_text);
-  const message = String(parsed.message || '').trim();
+  const message = stripUrls(String(parsed.message || '').trim());
   if (!message) throw new Error('A IA não encontrou um hype adequado agora.');
+  const citations = extractWebEvidence(response);
+  const claimed = Array.isArray(parsed.sources) ? parsed.sources : [];
+  const sources = citations.map(source => {
+    const match = claimed.find(item => {
+      try { return new URL(item.url).hostname.replace(/^www\./, '') === source.domain; } catch { return false; }
+    });
+    return { ...source, publishedAt: match?.publishedAt ? String(match.publishedAt).slice(0, 40) : null };
+  }).slice(0, 5);
   return {
     message,
     topic: String(parsed.topic || 'hype geek').slice(0, 120),
-    confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0)))
+    confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0))),
+    sources,
+    hypeCheckedAt: nowIso()
   };
 }
 
@@ -622,9 +724,11 @@ export async function syncShopeeCatalog({ force = false } = {}) {
     e.status = 429;
     throw e;
   }
-  const prompt = `Use busca web para inspecionar SOMENTE a loja Shopee ${SHOPEE_STORE_URL}. Localize produtos reais visíveis dessa loja e links individuais.\nRetorne JSON puro no formato {"products":[{"name":"...","price":"R$ ...","url":"https://shopee.com.br/...","confidence":0.0}]}.\nMáximo 30. Não invente item, preço nem URL. Itens novos serão enviados para revisão humana, então prefira precisão a quantidade.`;
+  const prompt = `Use busca web para inspecionar SOMENTE a loja Shopee ${SHOPEE_STORE_URL}. Localize produtos reais visíveis dessa loja e links individuais.
+Retorne JSON puro no formato {"products":[{"name":"...","price":"R$ ...","url":"https://shopee.com.br/...","confidence":0.0}]}.
+Máximo 30. Não invente item, preço nem URL. Itens novos serão enviados para revisão humana, então prefira precisão a quantidade.`;
   const response = await aiResponse({
-    kind: 'sync', model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5',
+    kind: 'sync', model: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra',
     tools: [{ type: 'web_search' }], input: prompt
   });
   const parsed = extractJson(response.output_text);
@@ -632,6 +736,7 @@ export async function syncShopeeCatalog({ force = false } = {}) {
   if (!incoming.length) throw new Error('Nenhum candidato com link individual foi encontrado.');
   const existing = await listProducts();
   const byUrl = new Map(existing.filter(p => p.shopeeUrl).map(p => [p.shopeeUrl, p]));
+  const seenUrls = new Set();
   const now = nowIso();
   let created = 0, updated = 0, ignored = 0;
   const samples = [];
@@ -641,12 +746,14 @@ export async function syncShopeeCatalog({ force = false } = {}) {
       const url = await normalizeShopeeUrl(item.url);
       const confidence = Math.max(0, Math.min(1, Number(item.confidence ?? 0)));
       if (!name || !url || confidence < 0.55) { ignored++; continue; }
+      if (seenUrls.has(url)) { ignored++; continue; }
+      seenUrls.add(url);
       const old = byUrl.get(url);
       if (old) {
         await casProduct(old.id, p => ({
           ...p,
-          observedPrice: String(item.price || '').trim(), lastSyncSeenAt: now,
-          syncConfidence: confidence, updatedAt: now
+          observedPrice: String(item.price || '').trim(), lastSyncSeenAt: now, lastCatalogCheckAt: now,
+          missingSyncCount: 0, catalogStatus: 'seen', syncConfidence: confidence, updatedAt: now
         }));
         updated++;
       } else {
@@ -654,16 +761,24 @@ export async function syncShopeeCatalog({ force = false } = {}) {
           id: uuid(), name, category: 'Shopee', price: '', observedPrice: String(item.price || '').trim(),
           description: 'Candidato encontrado na loja pública da Shopee. Confirme antes de usar em automação.',
           imageUrl: '', shopeeUrl: url, mediaKey: '', imageMime: '', active: false, verified: false, verifiedAt: null,
-          source: 'shopee_sync', syncConfidence: confidence, lastSyncSeenAt: now, lastPostedAt: null, performanceScore: 0,
+          source: 'shopee_sync', syncConfidence: confidence, lastSyncSeenAt: now, lastCatalogCheckAt: now, missingSyncCount: 0, catalogStatus: 'seen', lastPostedAt: null, performanceScore: 0,
           createdAt: now, updatedAt: null
         };
         const r = await productsStore().setJSON(`product/${p.id}`, p, { onlyIfNew: true });
-        if (r.modified) created++; else ignored++;
+        if (r.modified) { created++; byUrl.set(url, productView(p)); await indexProduct(p, { isNew: true }).catch(() => {}); }
+        else ignored++;
       }
       if (samples.length < 5) samples.push({ name, url, confidence });
     } catch { ignored++; }
   }
-  const result = { checkedAt: now, created, updated, ignored, found: incoming.length, storeUrl: SHOPEE_STORE_URL };
+  for (const product of existing.filter(p => p.shopeeUrl && p.verified)) {
+    if (seenUrls.has(product.shopeeUrl)) continue;
+    await casProduct(product.id, p => ({
+      ...p, lastCatalogCheckAt: now, missingSyncCount: Number(p.missingSyncCount || 0) + 1,
+      catalogStatus: Number(p.missingSyncCount || 0) + 1 >= 2 ? 'stale' : 'not-seen', updatedAt: now
+    })).catch(() => {});
+  }
+  const result = { checkedAt: now, created, updated, ignored, found: incoming.length, seen: seenUrls.size, storeUrl: SHOPEE_STORE_URL };
   await systemStore().setJSON('shopee-last-sync', result);
   await audit('shopee_sync', result);
   return { ...result, samples };
@@ -732,10 +847,10 @@ function creativeVariant(seed) {
 }
 
 function svgLines(lines, { x, y, size, gap, color = '#0b111b', weight = 800, anchor = 'start' }) {
-  return lines.map((line, i) => `<text x="${x}" y="${y + i * gap}" text-anchor="${anchor}" font-family="Arial, Helvetica, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${xmlEsc(line)}</text>`).join('');
+  return lines.map((line, i) => `<text x="${x}" y="${y + i * gap}" text-anchor="${anchor}" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}">${xmlEsc(line)}</text>`).join('');
 }
 
-async function createCreative({ type, message, topic, product, salt = '' }) {
+async function createCreative({ type, message, topic, product, salt = '', backgroundBuffer = null, visualSource = 'template', aiModel = null }) {
   const seed = `${type}|${topic || product?.name || ''}|${DateTime.now().setZone(TIMEZONE).toISODate()}|${salt}`;
   const variant = creativeVariant(seed);
   const isSale = type === 'sale';
@@ -745,7 +860,7 @@ async function createCreative({ type, message, topic, product, salt = '' }) {
   const firstLine = String(message || '').split('\n').find(Boolean) || '';
   const sub = isSale ? (product?.price || 'Disponível na Shopee') : firstLine;
   const image = isSale ? await productImageBuffer(product) : null;
-  const base = sharp({ create: { width: 1080, height: 1080, channels: 4, background: '#ffffff' } });
+  const base = backgroundBuffer ? sharp(backgroundBuffer).rotate().resize(1080, 1080, { fit: 'cover', position: 'centre' }) : sharp({ create: { width: 1080, height: 1080, channels: 4, background: '#ffffff' } });
   const composites = [];
 
   const decorations = variant % 3 === 0
@@ -753,23 +868,31 @@ async function createCreative({ type, message, topic, product, salt = '' }) {
     : variant % 3 === 1
       ? `<rect x="0" y="0" width="1080" height="220" fill="${soft}"/><circle cx="1020" cy="860" r="230" fill="${soft}"/>`
       : `<path d="M0 0 H1080 V180 C760 310 360 40 0 220Z" fill="${soft}"/><path d="M1080 1080 H0 V930 C340 800 750 1060 1080 890Z" fill="${soft}"/>`;
-  const bg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1080" height="1080" fill="#fff"/>${decorations}<rect x="54" y="54" width="972" height="972" rx="38" fill="none" stroke="#e5e7eb" stroke-width="2"/></svg>`;
+  const bg = backgroundBuffer
+    ? `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1080" height="1080" fill="#fff" opacity="0.22"/><rect x="54" y="54" width="972" height="972" rx="38" fill="none" stroke="#ffffff" stroke-opacity="0.68" stroke-width="3"/></svg>`
+    : `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg"><rect width="1080" height="1080" fill="#fff"/>${decorations}<rect x="54" y="54" width="972" height="972" rx="38" fill="none" stroke="#e5e7eb" stroke-width="2"/></svg>`;
   composites.push({ input: Buffer.from(bg), left: 0, top: 0 });
 
   let titleX = 92, titleY = 650, titleWidth = 896, titleSize = 62, align = 'start';
   if (isSale && image) {
-    if (variant % 3 === 0) {
-      const photo = await sharp(image).rotate().resize(860, 560, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
-      composites.push({ input: photo, left: 110, top: 120 });
-      titleY = 720; titleWidth = 850; titleSize = 46;
-    } else if (variant % 3 === 1) {
-      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
-      composites.push({ input: photo, left: 520, top: 180 });
-      titleX = 90; titleY = 410; titleWidth = 390; titleSize = 52;
+    if (variant === 0) {
+      const photo = await sharp(image).rotate().resize(860, 540, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 110, top: 125 }); titleY = 720; titleWidth = 850; titleSize = 46;
+    } else if (variant === 1) {
+      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 520, top: 180 }); titleX = 90; titleY = 410; titleWidth = 390; titleSize = 52;
+    } else if (variant === 2) {
+      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 55, top: 180 }); titleX = 600; titleY = 410; titleWidth = 390; titleSize = 52;
+    } else if (variant === 3) {
+      const photo = await sharp(image).rotate().resize(650, 650, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 360, top: 255 }); titleX = 90; titleY = 350; titleWidth = 330; titleSize = 48;
+    } else if (variant === 4) {
+      const photo = await sharp(image).rotate().resize(720, 620, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 180, top: 310 }); titleX = 90; titleY = 220; titleWidth = 900; titleSize = 48;
     } else {
-      const photo = await sharp(image).rotate().resize(505, 760, { fit: 'contain', background: '#ffffff' }).webp({ quality: 92 }).toBuffer();
-      composites.push({ input: photo, left: 55, top: 180 });
-      titleX = 600; titleY = 410; titleWidth = 390; titleSize = 52;
+      const photo = await sharp(image).rotate().resize(560, 720, { fit: 'contain', background: '#ffffff00' }).webp({ quality: 94 }).toBuffer();
+      composites.push({ input: photo, left: 260, top: 120 }); titleX = 540; titleY = 760; titleWidth = 430; titleSize = 45;
     }
   } else {
     titleY = variant % 2 ? 420 : 360;
@@ -784,15 +907,40 @@ async function createCreative({ type, message, topic, product, salt = '' }) {
   const footer = isSale ? 'Veja o link do produto na legenda' : type === 'hype' ? 'O que você achou?' : 'Sua opinião faz parte da conversa';
   const textSvg = `<svg width="1080" height="1080" xmlns="http://www.w3.org/2000/svg">
     <rect x="92" y="88" width="${Math.min(650, 40 + approxTextWidth(label, 25))}" height="50" rx="25" fill="${accent}"/>
-    <text x="116" y="121" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#ffffff">${xmlEsc(label)}</text>
+    <text x="116" y="121" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#ffffff">${xmlEsc(label)}</text>
     ${svgLines(titleLines,{x:titleX,y:titleY,size:titleSize,gap:Math.round(titleSize*1.12),color:'#0b111b',weight:900,anchor:align})}
     ${svgLines(subLines,{x:titleX,y:titleY + titleLines.length*Math.round(titleSize*1.12)+(isSale && variant % 3 === 0 ? 26 : 42),size:subSize,gap:44,color:'#475569',weight:600,anchor:align})}
-    <rect x="92" y="955" width="12" height="12" rx="6" fill="${accent}"/><text x="122" y="970" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" fill="#334155">${xmlEsc(footer)}</text>
+    <rect x="92" y="955" width="12" height="12" rx="6" fill="${accent}"/><text x="122" y="970" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="24" font-weight="700" fill="#334155">${xmlEsc(footer)}</text>
   </svg>`;
   composites.push({ input: Buffer.from(textSvg), left: 0, top: 0 });
   const output = await base.composite(composites).webp({ quality: 92 }).toBuffer();
-  const saved = await saveGeneratedMedia(output, { mime: 'image/webp', source: 'creative-engine-v2', type, variant });
-  return { ...saved, variant };
+  const saved = await saveGeneratedMedia(output, { mime: 'image/webp', source: visualSource, type, variant, aiModel: aiModel || '' });
+  return { ...saved, variant, visualSource, aiModel };
+}
+
+async function createAiCreative({ type, message, topic, product, salt = '' }) {
+  await consumeAiBudget('image');
+  const prompt = buildImagePrompt({ type, topic, category: product?.category || '' });
+  const generated = await generateImageBuffer({
+    apiKey: process.env.OPENAI_API_KEY,
+    prompt,
+    model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
+    quality: process.env.OPENAI_IMAGE_QUALITY || 'low',
+    size: '1024x1024'
+  });
+  const backgroundBuffer = await sharp(generated.buffer, { failOn: 'error' }).rotate().resize(1080, 1080, { fit: 'cover' }).webp({ quality: 92 }).toBuffer();
+  return createCreative({ type, message, topic, product, salt, backgroundBuffer, visualSource: 'openai-image', aiModel: generated.model });
+}
+
+async function assessTextSafety(message) {
+  const local = sensitiveReasons(message);
+  let moderation;
+  try {
+    moderation = await moderateText({ apiKey: process.env.OPENAI_API_KEY, text: message });
+  } catch (err) {
+    moderation = { checked: false, flagged: false, categories: [], error: err.message };
+  }
+  return { moderation, sensitiveReasons: local };
 }
 
 export function textSimilarity(a, b) {
@@ -810,7 +958,13 @@ async function qualityGate(post, product = null) {
   const msg = String(post.message || '').trim();
   if (msg.length < 45) { score -= 20; warnings.push('copy muito curta'); }
   if (msg.length > 1800) { score -= 15; warnings.push('copy muito longa'); }
-  if (/\b(lorem ipsum|placeholder|insira aqui|http:\/\/|example\.com)\b/i.test(msg)) blockers.push('placeholder ou URL insegura na copy');
+  if (/(lorem ipsum|placeholder|insira aqui|example\.com)/i.test(msg)) blockers.push('placeholder na copy');
+  if (copyHasUrl(msg)) blockers.push('a copy contém URL; links públicos são inseridos somente pelo servidor');
+  const localSensitive = Array.from(new Set([...(post.sensitiveReasons || []), ...sensitiveReasons(`${post.topic || ''} ${msg}`)]));
+  if (localSensitive.length) blockers.push(`tema sensível: ${localSensitive.join(', ')}`);
+  if (post.moderation?.flagged) blockers.push('moderação de segurança bloqueou o conteúdo');
+  if (post.origin === 'planner' && post.moderation?.checked === false) warnings.push('moderação automática não foi confirmada');
+
   const recent = (await listRecentPosts(35)).filter(p => p.status === 'published');
   const maxSimilarity = recent.reduce((m, p) => Math.max(m, textSimilarity(msg, p.message)), 0);
   if (maxSimilarity >= 0.82) blockers.push('copy muito parecida com publicação recente');
@@ -821,19 +975,25 @@ async function qualityGate(post, product = null) {
     if (product && !product.active) blockers.push('produto inativo');
     if (product && !product.verified) blockers.push('produto ainda não confirmado');
     if (!post.shopeeUrl || post.shopeeUrl !== product?.shopeeUrl) blockers.push('link Shopee não confere com o produto atual');
-    if (!product?.mediaKey && !product?.imageUrl) blockers.push('produto sem foto real cadastrada');
+    if (!product?.mediaKey) blockers.push('produto sem foto real interna validada');
+    if (product && !productFreshnessState(product, Date.now(), intEnv('PRODUCT_MAX_STALE_DAYS', 14)).fresh) blockers.push('produto sem verificação recente no catálogo');
   }
   if (post.plannerType === 'hype') {
-    if (Number(post.hypeConfidence ?? 0) < 0.65) blockers.push('confiança insuficiente no hype');
-    if (/\b(eleição|presidente|governo|guerra|morreu|morte|assassin|crime|tragédia|tragico|tragico|acidente fatal)\b/i.test(`${post.topic || ''} ${msg}`)) blockers.push('tema sensível bloqueado');
+    if (Number(post.hypeConfidence ?? 0) < 0.70) blockers.push('confiança insuficiente no hype');
+    if (!Array.isArray(post.sources) || !post.sources.length) blockers.push('hype sem evidência de fonte da pesquisa web');
+    if (!post.hypeCheckedAt || Date.now() - Date.parse(post.hypeCheckedAt) > intEnv('HYPE_MAX_AGE_HOURS', 4) * 3600_000) blockers.push('hype ficou velho demais');
   }
   if (post.plannerType === 'growth' && !msg.includes('?')) { score -= 10; warnings.push('post de crescimento sem pergunta clara'); }
-  if (post.origin === 'planner' && !post.mediaKey && !post.imageUrl) blockers.push('post automático sem arte visual');
+  if (post.origin === 'planner' && !post.mediaKey) blockers.push('post automático sem mídia interna validada');
+  if (post.origin === 'planner' && boolEnv('REQUIRE_AI_VISUAL', true) && post.visualMode !== 'ai') blockers.push('arte de IA não foi gerada; revisão manual necessária');
+  if (post.visualAiError) warnings.push('a geração visual de IA falhou e houve fallback');
+
   score = Math.max(0, score);
+  if (blockers.length) score = Math.min(score, 59);
   return { score, blockers, warnings, maxSimilarity: Number(maxSimilarity.toFixed(3)), canAutoApprove: blockers.length === 0 && score >= intEnv('AUTO_APPROVE_MIN_SCORE', 85) };
 }
 
-async function insertPost({ product = null, displayName = '', message, imageUrl = '', mediaKey = '', imageMime = '', scheduledAt = null, origin = 'manual', plannerType = null, status = 'draft', topic = '', hypeConfidence = null, dailyDate = null, generatedVisual = false }) {
+async function insertPost({ product = null, displayName = '', message, imageUrl = '', mediaKey = '', imageMime = '', scheduledAt = null, origin = 'manual', plannerType = null, status = 'draft', topic = '', hypeConfidence = null, dailyDate = null, generatedVisual = false, visualMode = 'template', visualAiError = null, sources = [], hypeCheckedAt = null, moderation = null, sensitiveReasons = [] }) {
   const clean = String(message || '').trim();
   if (!clean) throw new Error('Legenda é obrigatória.');
   const now = nowIso();
@@ -842,7 +1002,8 @@ async function insertPost({ product = null, displayName = '', message, imageUrl 
     imageUrl: imageUrl || '', mediaKey: mediaKey || '', imageMime: imageMime || '', shopeeUrl: product?.shopeeUrl || '',
     status, scheduledAt, createdAt: now, updatedAt: null, publishedAt: null, metaPostId: null,
     error: null, errorCode: null, errorSubcode: null, lastAttemptAt: null, publishToken: null, publishLockAt: null,
-    origin, plannerType, topic, hypeConfidence, dailyDate, quality: null, performance: null, generatedVisual
+    origin, plannerType, topic, hypeConfidence, dailyDate, quality: null, performance: null, generatedVisual, visualMode, visualAiError,
+    sources: Array.isArray(sources) ? sources.slice(0, 6) : [], hypeCheckedAt, moderation, sensitiveReasons: Array.isArray(sensitiveReasons) ? sensitiveReasons : []
   };
   p.quality = await qualityGate(p, product);
   if (boolEnv('AUTO_APPROVE_PLANNER') && origin === 'planner' && p.quality.canAutoApprove) p.status = 'approved';
@@ -857,36 +1018,61 @@ async function buildPostForType(type, scheduledAt, dailyDate, origin = 'planner'
   if (type === 'sale') {
     const product = await chooseSaleProduct();
     const generated = await generateSaleCaption(product);
-    const creative = await createCreative({ type, message: generated.message, topic: generated.topic, product }).catch(err => { console.error('[creative-sale]', err); return null; });
-    return insertPost({ product, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate, mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: creative ? '' : product.imageUrl || '', generatedVisual: Boolean(creative) });
+    const safety = await assessTextSafety(generated.message);
+    let creative = null, visualAiError = null;
+    try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic, product }); }
+    catch (err) { visualAiError = err.message; console.error('[creative-ai-sale]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic, product }).catch(() => null); }
+    return insertPost({ product, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate,
+      mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: '', generatedVisual: Boolean(creative),
+      visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
   }
   if (type === 'hype') {
     const generated = await generateHypePost();
-    const creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(err => { console.error('[creative-hype]', err); return null; });
-    return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, hypeConfidence: generated.confidence, dailyDate, mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative) });
+    const safety = await assessTextSafety(`${generated.topic} ${generated.message}`);
+    let creative = null, visualAiError = null;
+    try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic }); }
+    catch (err) { visualAiError = err.message; console.error('[creative-ai-hype]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
+    return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic,
+      hypeConfidence: generated.confidence, dailyDate, mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative),
+      visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, sources: generated.sources, hypeCheckedAt: generated.hypeCheckedAt,
+      moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
   }
   const generated = await generateGrowthPost();
-  const creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(err => { console.error('[creative-growth]', err); return null; });
-  return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate, mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative) });
+  const safety = await assessTextSafety(generated.message);
+  let creative = null, visualAiError = null;
+  try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic }); }
+  catch (err) { visualAiError = err.message; console.error('[creative-ai-growth]', err); creative = await createCreative({ type, message: generated.message, topic: generated.topic }).catch(() => null); }
+  return insertPost({ displayName: spec.label, message: generated.message, scheduledAt, origin, plannerType: type, topic: generated.topic, dailyDate,
+    mediaKey: creative?.mediaKey || '', imageMime: creative?.imageMime || '', generatedVisual: Boolean(creative),
+    visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
 }
 
 export async function generateManualSale(productId) {
   const product = await getProduct(productId);
-  if (!product || !product.active || !product.verified) throw new Error('Produto precisa estar ativo e confirmado.');
+  if (!product || !product.active || !product.verified || !product.mediaKey) throw new Error('Produto precisa estar ativo, confirmado e com foto real interna.');
   const generated = await generateSaleCaption(product);
-  const creative = await createCreative({ type: 'sale', message: generated.message, topic: generated.topic, product }).catch(() => null);
-  return insertPost({ product, message: generated.message, origin: 'manual', plannerType: 'sale', topic: generated.topic, mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: creative ? '' : product.imageUrl || '', generatedVisual: Boolean(creative) });
+  const safety = await assessTextSafety(generated.message);
+  let creative = null, visualAiError = null;
+  try { creative = await createAiCreative({ type: 'sale', message: generated.message, topic: generated.topic, product, salt: uuid() }); }
+  catch (err) { visualAiError = err.message; creative = await createCreative({ type: 'sale', message: generated.message, topic: generated.topic, product, salt: uuid() }); }
+  return insertPost({ product, message: generated.message, origin: 'manual', plannerType: 'sale', topic: generated.topic,
+    mediaKey: creative?.mediaKey || product.mediaKey || '', imageMime: creative?.imageMime || product.imageMime || '', imageUrl: '', generatedVisual: Boolean(creative),
+    visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons });
 }
 
 export async function generateManualType(type, productId = null) {
   if (type === 'sale') return generateManualSale(productId);
   if (!['hype', 'growth'].includes(type)) throw new Error('Tipo de teste inválido.');
   const generated = type === 'hype' ? await generateHypePost() : await generateGrowthPost();
-  const creative = await createCreative({ type, message: generated.message, topic: generated.topic, salt: uuid() });
+  const safety = await assessTextSafety(`${generated.topic || ''} ${generated.message}`);
+  let creative = null, visualAiError = null;
+  try { creative = await createAiCreative({ type, message: generated.message, topic: generated.topic, salt: uuid() }); }
+  catch (err) { visualAiError = err.message; creative = await createCreative({ type, message: generated.message, topic: generated.topic, salt: uuid() }); }
   return insertPost({
-    displayName: type === 'hype' ? 'Hype do momento' : 'Crescimento',
-    message: generated.message, origin: 'manual', plannerType: type, topic: generated.topic,
-    hypeConfidence: generated.confidence ?? null, mediaKey: creative.mediaKey, imageMime: creative.imageMime, generatedVisual: true
+    displayName: type === 'hype' ? 'Hype do momento' : 'Crescimento', message: generated.message, origin: 'manual', plannerType: type, topic: generated.topic,
+    hypeConfidence: generated.confidence ?? null, mediaKey: creative.mediaKey, imageMime: creative.imageMime, generatedVisual: true,
+    visualMode: creative?.visualSource === 'openai-image' ? 'ai' : 'fallback', visualAiError, sources: generated.sources || [], hypeCheckedAt: generated.hypeCheckedAt || null,
+    moderation: safety.moderation, sensitiveReasons: safety.sensitiveReasons
   });
 }
 
@@ -913,7 +1099,22 @@ export async function regeneratePostCreative(id, mode = 'template') {
   return updated;
 }
 
+export async function regeneratePostCreativeAi(id) {
+  const current = await getPost(id);
+  if (!current) throw new Error('Post não encontrado.');
+  if (['published', 'publishing'].includes(current.status)) throw new Error('Não é possível trocar a arte de um post já publicado/em publicação.');
+  const product = current.productId ? await getProduct(current.productId) : null;
+  const creative = await createAiCreative({ type: current.plannerType || 'growth', message: current.message, topic: current.topic, product, salt: uuid() });
+  return casPost(id, async row => {
+    row.mediaKey = creative.mediaKey; row.imageMime = creative.imageMime; row.imageUrl = ''; row.generatedVisual = true; row.visualMode = 'ai'; row.visualAiError = null; row.creativeVariant = creative.variant;
+    if (row.status === 'approved') row.status = 'draft';
+    row.quality = await qualityGate(row, product); row.updatedAt = nowIso(); return row;
+  });
+}
+
 export async function patchPost(id, body) {
+  const incomingMessage = 'message' in body ? String(body.message || '').trim() : null;
+  const safety = incomingMessage ? await assessTextSafety(incomingMessage) : null;
   const updated = await casPost(id, async current => {
     if (['publishing', 'published'].includes(current.status)) {
       const e = new Error('Post em publicação ou já publicado não pode ser editado.'); e.status = 409; throw e;
@@ -922,7 +1123,9 @@ export async function patchPost(id, body) {
     if ('message' in body) {
       const m = String(body.message || '').trim();
       if (!m) throw new Error('Legenda não pode ficar vazia.');
-      current.message = m;
+      current.message = stripUrls(m);
+      current.moderation = safety?.moderation || current.moderation;
+      current.sensitiveReasons = safety?.sensitiveReasons || current.sensitiveReasons || [];
     }
     if ('scheduledLocal' in body) current.scheduledAt = body.scheduledLocal ? localToUtc(body.scheduledLocal) : null;
     if ('imageUrl' in body) current.imageUrl = validateHttpsUrl(body.imageUrl);
@@ -950,8 +1153,8 @@ export async function patchPost(id, body) {
 
 
 export async function chooseSaleProduct() {
-  const products = (await listProducts()).filter(p => p.active && p.verified && p.shopeeUrl && (p.mediaKey || p.imageUrl));
-  if (!products.length) throw new Error('Nenhum produto pronto para venda: precisa estar ativo, confirmado, com link Shopee e foto real.');
+  const products = (await listProducts()).filter(p => p.active && p.verified && p.shopeeUrl && p.mediaKey && productFreshnessState(p, Date.now(), intEnv('PRODUCT_MAX_STALE_DAYS', 14)).fresh);
+  if (!products.length) throw new Error('Nenhum produto pronto para venda: precisa estar ativo, confirmado, com link Shopee, foto interna e catálogo recente.');
   const recent = await listRecentPosts(70);
   const recentIds = new Set(recent.filter(p => p.status === 'published' && p.plannerType === 'sale' && p.productId).slice(0, 5).map(p => p.productId));
   products.sort((a, b) => {
@@ -1016,7 +1219,7 @@ async function claimPlanSlot(date, type) {
       slot.state = 'expired'; slot.lastError = 'Janela de preparação já passou.'; p.updatedAt = nowIso(); return p;
     }
     if (['ready','published','cancelled','expired'].includes(slot.state)) return p;
-    if (slot.state === 'creating' && Date.now() - Date.parse(slot.lockedAt || 0) < 8 * 60_000) return p;
+    if (slot.state === 'creating' && Date.now() - Date.parse(slot.lockedAt || 0) < 14 * 60_000) return p;
     if (Number(slot.attempts || 0) >= SLOT_MAX_ATTEMPTS) { slot.state = 'failed'; return p; }
     if (slot.nextRetryAt && Date.now() < Date.parse(slot.nextRetryAt)) return p;
     slot.state = 'creating'; slot.attempts = Number(slot.attempts || 0) + 1; slot.lockedAt = nowIso(); slot.lastError = null;
@@ -1051,16 +1254,113 @@ export async function generatePlan(dateRaw) {
   return reserveDailyPlan(dateRaw);
 }
 
+function workerSecret() {
+  return process.env.WORKER_SECRET || process.env.SESSION_SECRET || '';
+}
+
+async function dispatchBackground(payload) {
+  const base = process.env.URL;
+  const secret = workerSecret();
+  if (!base) throw new Error('URL do site Netlify não disponível para disparar o worker.');
+  if (!secret) throw new Error('SESSION_SECRET/WORKER_SECRET não disponível para proteger o worker.');
+  const response = await fetch(new URL('/.netlify/functions/content-worker', base), {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-animaca-worker-secret': secret },
+    body: JSON.stringify(payload), signal: AbortSignal.timeout(12000)
+  });
+  if (!response.ok && response.status !== 202) throw new Error(`Não foi possível disparar o worker (HTTP ${response.status}).`);
+  return { dispatched: true, at: nowIso(), action: payload.action };
+}
+
+export async function dispatchPrepareDailySlot(type) {
+  if (!boolEnv('AUTO_PLAN', false)) return { autoPlan: false, type };
+  const date = DateTime.now().setZone(TIMEZONE).toISODate();
+  return dispatchBackground({ action: 'prepare', type, date });
+}
+
+export async function dispatchAutoShopeeSync() {
+  if (!boolEnv('AUTO_SYNC_SHOPEE', false)) return { autoSyncShopee: false };
+  return dispatchBackground({ action: 'shopee-sync' });
+}
+
+export async function dispatchCleanupMedia() {
+  return dispatchBackground({ action: 'cleanup-media' });
+}
+
+async function getJobEntry(id) {
+  const entry = await jobsStore().getWithMetadata(`job/${id}`, { type: 'json', consistency: 'strong' });
+  return entry ? { job: entry.data, etag: entry.etag } : null;
+}
+
+async function casJob(id, mutate, retries = 5) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const entry = await getJobEntry(id); if (!entry) throw new Error('Job não encontrado.');
+    const next = await mutate(structuredClone(entry.job));
+    const result = await jobsStore().setJSON(`job/${id}`, next, { onlyIfMatch: entry.etag });
+    if (result.modified) return next;
+  }
+  throw new Error('Conflito ao atualizar job.');
+}
+
+export async function getJob(id) {
+  const entry = await getJobEntry(id);
+  return entry?.job || null;
+}
+
+async function queueJob(data) {
+  const job = { id: uuid(), status: 'queued', createdAt: nowIso(), updatedAt: nowIso(), error: null, result: null, ...data };
+  const result = await jobsStore().setJSON(`job/${job.id}`, job, { onlyIfNew: true });
+  if (!result.modified) throw new Error('Não foi possível criar o job.');
+  try { await dispatchBackground({ action: 'job', jobId: job.id }); }
+  catch (err) { await casJob(job.id, x => ({ ...x, status: 'error', error: err.message, updatedAt: nowIso() })).catch(() => {}); throw err; }
+  return job;
+}
+
+export async function queueManualGeneration(type, productId = null) {
+  if (!['sale', 'hype', 'growth'].includes(type)) throw new Error('Tipo de geração inválido.');
+  return queueJob({ kind: 'manual-generation', type, productId });
+}
+
+export async function queueCreativeGeneration(postId) {
+  if (!postId) throw new Error('Post obrigatório.');
+  return queueJob({ kind: 'creative-ai', postId });
+}
+
+export async function runGenerationJob(id) {
+  const claim = await casJob(id, job => {
+    if (job.status === 'complete') return job;
+    if (job.status === 'running' && Date.now() - Date.parse(job.updatedAt || 0) < 14 * 60_000) return job;
+    return { ...job, status: 'running', updatedAt: nowIso(), error: null };
+  });
+  if (claim.status === 'complete') return claim;
+  if (claim.status === 'running' && claim.result) return claim;
+  try {
+    let result;
+    if (claim.kind === 'manual-generation') result = await generateManualType(claim.type, claim.productId || null);
+    else if (claim.kind === 'creative-ai') result = await regeneratePostCreativeAi(claim.postId);
+    else throw new Error('Tipo de job desconhecido.');
+    return await casJob(id, job => ({ ...job, status: 'complete', result: { postId: result.id }, updatedAt: nowIso(), completedAt: nowIso() }));
+  } catch (err) {
+    await casJob(id, job => ({ ...job, status: 'error', error: err.message, updatedAt: nowIso(), completedAt: nowIso() })).catch(() => {});
+    throw err;
+  }
+}
+
 async function validateBeforePublish(post) {
   if (!post) throw new Error('Post não encontrado.');
   const product = post.productId ? await getProduct(post.productId) : null;
   const freshQuality = await qualityGate(post, product);
   if (freshQuality.blockers.length) throw new Error(`Quality Gate bloqueou: ${freshQuality.blockers.join('; ')}`);
+  if (!post.mediaKey || !await mediaExists(post.mediaKey)) throw new Error('A mídia interna do post não existe mais; gere/refaça a arte antes de publicar.');
+  if (post.origin === 'planner' && boolEnv('REQUIRE_AI_VISUAL', true) && post.visualMode !== 'ai') throw new Error('A arte de IA não foi concluída; publicação automática bloqueada.');
   if (post.plannerType === 'sale') {
     if (!product || !product.active || !product.verified) throw new Error('Produto da venda está inativo, ausente ou não confirmado.');
     if (product.shopeeUrl !== post.shopeeUrl) throw new Error('O link atual do produto mudou; revise o post antes de publicar.');
+    if (!productFreshnessState(product, Date.now(), intEnv('PRODUCT_MAX_STALE_DAYS', 14)).fresh) throw new Error('Produto está com verificação de catálogo vencida.');
   }
-  if (post.plannerType === 'hype' && Date.now() - Date.parse(post.createdAt) > 4 * 3600_000) throw new Error('Post de hype ficou velho demais; gere um novo assunto.');
+  if (post.plannerType === 'hype') {
+    if (!Array.isArray(post.sources) || !post.sources.length) throw new Error('Hype sem fonte verificável.');
+    if (Date.now() - Date.parse(post.hypeCheckedAt || post.createdAt) > intEnv('HYPE_MAX_AGE_HOURS', 4) * 3600_000) throw new Error('Post de hype ficou velho demais; gere um novo assunto.');
+  }
   return true;
 }
 
@@ -1192,6 +1492,7 @@ export async function resolvePostReview(id, resolution) {
     if (resolution === 'published') return { ...current, status: 'published', publishedAt: current.publishedAt || now, error: null, errorCode: null, errorSubcode: null, updatedAt: now };
     return { ...current, status: 'cancelled', error: null, errorCode: null, errorSubcode: null, updatedAt: now };
   });
+  if (resolution === 'published' && updated.productId) await casProduct(updated.productId, p => ({ ...p, lastPostedAt: updated.publishedAt || nowIso(), updatedAt: nowIso() })).catch(() => {});
   if (updated.dailyDate && updated.plannerType) await markPlanSlot(updated.dailyDate, updated.plannerType, { state: resolution, postId: updated.id, ...(resolution === 'published' ? { publishedAt: updated.publishedAt } : {}) });
   await audit('review_resolved', { postId: id, resolution });
   return updated;
@@ -1202,6 +1503,7 @@ export async function publishDailySlot(type, dateRaw = null) {
   const date = String(dateRaw || DateTime.now().setZone(TIMEZONE).toISODate());
   const plan = await ensurePlan(date);
   const slot = plan.slots?.[type];
+  if (slot?.state === 'published') return { type, date, published: true, alreadyPublished: true, postId: slot.postId || null };
   if (!slot?.postId) return { type, date, skipped: true, reason: 'slot sem post preparado', state: slot?.state || 'planned' };
   const post = await getPost(slot.postId);
   if (!post) return { type, date, skipped: true, reason: 'post não encontrado' };
@@ -1222,38 +1524,56 @@ export async function publishDuePosts(limit = 10) {
 
 async function recomputeProductPerformance(productId) {
   const samples = (await listRecentPosts(POST_INDEX_LIMIT))
-    .filter(p => p.status === 'published' && p.productId === productId && Number.isFinite(Number(p.performance?.score)))
-    .slice(0, 12);
+    .filter(p => p.status === 'published' && p.productId === productId && p.performance?.windows)
+    .slice(0, 12)
+    .map(p => {
+      const h24 = p.performance.windows.h24?.score;
+      const h72 = p.performance.windows.h72?.score;
+      if (Number.isFinite(Number(h24))) return Number(h24);
+      if (Number.isFinite(Number(h72))) return Number(h72) / 3;
+      return null;
+    }).filter(v => v != null);
   if (!samples.length) return null;
-  const score = samples.reduce((sum, p) => sum + Number(p.performance.score || 0), 0) / samples.length;
+  const score = samples.reduce((sum, value) => sum + value, 0) / samples.length;
   await casProduct(productId, p => ({ ...p, performanceScore: Number(score.toFixed(2)), performanceSamples: samples.length, performanceUpdatedAt: nowIso(), updatedAt: nowIso() })).catch(() => {});
   return score;
 }
 
-async function refreshPostPerformance(post) {
-  if (!post?.metaPostId) return null;
+function duePerformanceWindow(post, now = Date.now()) {
+  const ageHours = (now - Date.parse(post.publishedAt || 0)) / 3600_000;
+  const windows = post.performance?.windows || {};
+  if (ageHours >= 72 && ageHours <= 14 * 24 && !windows.h72) return 'h72';
+  if (ageHours >= 24 && ageHours <= 14 * 24 && !windows.h24) return 'h24';
+  return null;
+}
+
+async function refreshPostPerformance(post, windowKey) {
+  if (!post?.metaPostId || !windowKey) return null;
   const data = await graphGet(post.metaPostId, { fields: 'reactions.limit(0).summary(true),comments.limit(0).summary(true),shares' });
   const reactions = Number(data?.reactions?.summary?.total_count || 0);
   const comments = Number(data?.comments?.summary?.total_count || 0);
   const shares = Number(data?.shares?.count || 0);
   const score = reactions + comments * 4 + shares * 6;
-  const performance = { reactions, comments, shares, score, checkedAt: nowIso() };
-  const updated = await casPost(post.id, p => ({ ...p, performance, updatedAt: nowIso() }));
+  const snapshot = { reactions, comments, shares, score, checkedAt: nowIso(), window: windowKey };
+  const updated = await casPost(post.id, p => {
+    const windows = { ...(p.performance?.windows || {}), [windowKey]: snapshot };
+    return { ...p, performance: { ...(p.performance || {}), ...snapshot, windows }, updatedAt: nowIso() };
+  });
   if (updated.productId) await recomputeProductPerformance(updated.productId);
-  return performance;
+  return snapshot;
 }
 
 export async function refreshRecentPerformance(limit = 6) {
   if (!process.env.META_PAGE_ACCESS_TOKEN) return { refreshed: 0, errors: ['Meta não configurada'] };
   const now = Date.now();
   const candidates = (await listRecentPosts(POST_INDEX_LIMIT))
-    .filter(p => p.status === 'published' && p.metaPostId && p.publishedAt && now - Date.parse(p.publishedAt) >= 60 * 60_000 && now - Date.parse(p.publishedAt) <= 14 * 86400_000)
-    .sort((a, b) => String(a.performance?.checkedAt || '').localeCompare(String(b.performance?.checkedAt || '')))
-    .slice(0, limit);
-  const results = await Promise.allSettled(candidates.map(refreshPostPerformance));
+    .map(post => ({ post, window: duePerformanceWindow(post, now) }))
+    .filter(x => x.post.status === 'published' && x.post.metaPostId && x.window)
+    .sort((a, b) => String(a.post.publishedAt).localeCompare(String(b.post.publishedAt))).slice(0, limit);
+  const results = await Promise.allSettled(candidates.map(x => refreshPostPerformance(x.post, x.window)));
   const refreshed = results.filter(r => r.status === 'fulfilled').length;
   const errors = results.filter(r => r.status === 'rejected').map(r => r.reason?.message || 'erro');
-  await audit('performance_refresh', { refreshed, errors: errors.length });
+  await audit('performance_refresh', { refreshed, errors: errors.length, horizons: candidates.map(x => x.window) });
   return { refreshed, errors };
 }
 
@@ -1281,6 +1601,17 @@ export async function recordHealth(name, result) {
   });
 }
 
+function decorateHealth(health = {}) {
+  const now = Date.now();
+  const weekly = new Set(['cleanup-media']);
+  return Object.fromEntries(Object.entries(health || {}).map(([name, value]) => {
+    const maxAge = weekly.has(name) ? 8 * 86400_000 : 30 * 3600_000;
+    const age = value?.at ? now - Date.parse(value.at) : Infinity;
+    if (age > maxAge && value?.state !== 'off') return [name, { ...value, state: 'warning', stale: true, staleReason: 'sem execução recente' }];
+    return [name, value];
+  }));
+}
+
 export async function getDailyPlans() {
   const now = DateTime.now().setZone(TIMEZONE);
   const dates = [now.toISODate(), now.plus({ days: 1 }).toISODate()];
@@ -1305,11 +1636,12 @@ export async function bootstrapSummary() {
       autoPublish: boolEnv('AUTO_PUBLISH', false), graphVersion: process.env.META_GRAPH_VERSION || 'v26.0', timezone: TIMEZONE,
       plannerSlots: plannerSlots(), meta,
       shopee: { storeUrl: SHOPEE_STORE_URL, lastSync: sync || null, linkedProducts: products.filter(p => p.shopeeUrl).length, verifiedProducts: products.filter(p => p.active && p.verified && p.shopeeUrl).length },
-      counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, failures: 0 },
-      usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1) },
-      models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5-mini', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5' }, version: '0.6.0'
+      counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, image: 0, failures: 0 },
+      usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1), image: intEnv('AI_DAILY_IMAGE_LIMIT', 6) },
+      models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra', image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2' },
+      imageQuality: process.env.OPENAI_IMAGE_QUALITY || 'low', requireAiVisual: boolEnv('REQUIRE_AI_VISUAL', true), autoSyncShopee: boolEnv('AUTO_SYNC_SHOPEE', false), version: '0.7.0'
     },
-    data: { products, posts, plans, audit: auditLog?.items || [], health: health || {}, settings: { timezone: TIMEZONE, plannerSlots: plannerSlots(), storage: 'Netlify Blobs', strategy: PLAN_TYPES } }
+    data: { products, posts, plans, audit: auditLog?.items || [], health: decorateHealth(health || {}), settings: { timezone: TIMEZONE, plannerSlots: plannerSlots(), storage: 'Netlify Blobs', strategy: PLAN_TYPES } }
   };
 }
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.7.0
+- GPT Image 2 gera fundos/visuais reais; venda preserva a foto real do produto.
+- Geração pesada migra para Background Function; Scheduled Functions viram dispatchers.
+- Jobs manuais assíncronos com polling no painel.
+- Imagem externa é validada e internalizada; mídia é revalidada antes de publicar.
+- Hype guarda fontes/evidências e usa moderação + filtros de brand safety.
+- Catálogo ganha frescor/stale, deduplicação no mesmo sync e auto-sync opcional.
+- Quality Gate limita score quando há blocker e bloqueia URL na copy.
+- Publicação recebe recovery de 10 minutos.
+- Performance é comparada em janelas fixas de 24 h e 72 h.
+- Índice de produtos elimina scans completos rotineiros.
+- Mobile mantém IA/Meta/Atualizar visíveis e aumenta legibilidade.
+
 ## v0.5.0
 - Métricas priorizam `post_id` da Meta quando disponível, preservando o ID do post de feed.
 - Fail-safe: `AUTO_PLAN` fica desligado se não for explicitamente configurado como `true`.
