@@ -1,11 +1,12 @@
 {
   "name": "animaca-facebook-agent",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "netlify dev",
-    "check": "node --check netlify/lib/agent.mjs && node --check netlify/functions/api.mjs && node --check netlify/functions/scheduler.mjs"
+    "check": "node --check netlify/lib/agent.mjs && node --check netlify/functions/api.mjs && for f in netlify/functions/*.mjs; do node --check \"$f\"; done",
+    "test": "node --test tests/*.test.mjs"
   },
   "engines": {"node": ">=22.13.0"},
   "dependencies": {

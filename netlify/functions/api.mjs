@@ -1,12 +1,13 @@
 import {
   SESSION_COOKIE, safeEqual, signSession, isAuthenticated, checkLoginRate, resetLoginRate,
-  statusSummary, dataSummary, createProduct, updateProduct, deleteProduct, getProduct,
-  generateSaleCaption, insertPost, patchPost, generatePlan, syncShopeeCatalog,
-  validateMetaConnection, publishById, getMedia, localToUtc
+  bootstrapSummary, createProduct, updateProduct, updateProductImage, confirmProduct, deleteProduct,
+  generateManualSale, patchPost, generatePlan, syncShopeeCatalog, validateMetaConnection,
+  publishById, getMedia, refreshRecentPerformance
 } from '../lib/agent.mjs';
 
-const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers });
-const errorResponse = (err) => {
+const baseHeaders = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
+const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { ...baseHeaders, ...headers } });
+const errorResponse = err => {
   console.error('[api]', err);
   return json({ error: err?.message || 'Erro inesperado.', ambiguous: Boolean(err?.ambiguous) }, Number(err?.status || 400));
 };
@@ -25,6 +26,15 @@ function ipOf(req, context) {
   return context?.ip || req.headers.get('x-nf-client-connection-ip') || req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
 }
 
+function originDenied(req) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())) return null;
+  const origin = req.headers.get('origin');
+  if (!origin) return null;
+  const expected = new URL(req.url).origin;
+  if (origin !== expected) return json({ error: 'Origem da requisição não autorizada.' }, 403);
+  return null;
+}
+
 function authRequired(req) {
   if (!process.env.APP_PASSWORD) return json({ error: 'APP_PASSWORD não configurada. O painel foi bloqueado por segurança.' }, 503);
   if (!isAuthenticated(req)) return json({ error: 'Sessão não autenticada.', authRequired: true }, 401);
@@ -35,6 +45,7 @@ export default async (req, context) => {
   try {
     const route = routePath(req);
     const method = req.method.toUpperCase();
+    const badOrigin = originDenied(req); if (badOrigin) return badOrigin;
 
     if (route === '/auth/status' && method === 'GET') return json({ configured: Boolean(process.env.APP_PASSWORD), authenticated: isAuthenticated(req) });
 
@@ -58,24 +69,34 @@ export default async (req, context) => {
     if (route.startsWith('/media/') && method === 'GET') {
       const key = decodeURIComponent(route.slice('/media/'.length));
       const entry = await getMedia(key);
-      if (!entry) return new Response(null, { status: 404 });
-      return new Response(entry.data, { headers: { 'content-type': entry.metadata?.mime || 'image/webp', 'cache-control': 'private, max-age=3600' } });
+      if (!entry) return new Response(null, { status: 404, headers: baseHeaders });
+      return new Response(entry.data, { headers: { 'content-type': entry.metadata?.mime || 'image/webp', 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' } });
     }
 
-    if (route === '/status' && method === 'GET') return json(await statusSummary());
-    if (route === '/data' && method === 'GET') return json(await dataSummary());
+    if (route === '/bootstrap' && method === 'GET') return json(await bootstrapSummary());
     if (route === '/meta/validate' && method === 'POST') return json(await validateMetaConnection(true));
-    if (route === '/shopee/sync' && method === 'POST') return json(await syncShopeeCatalog());
+    if (route === '/performance/refresh' && method === 'POST') return json(await refreshRecentPerformance(6));
+    if (route === '/shopee/sync' && method === 'POST') return json(await syncShopeeCatalog({ force: false }));
 
     if (route === '/products' && method === 'POST') {
       const form = await req.formData();
       const file = form.get('image');
       return json(await createProduct({
-        name: form.get('name'), category: form.get('category'), price: form.get('price'),
-        description: form.get('description'), imageUrl: form.get('imageUrl'), shopeeUrl: form.get('shopeeUrl'),
-        file: file instanceof File && file.size ? file : null
+        name: form.get('name'), category: form.get('category'), price: form.get('price'), description: form.get('description'),
+        imageUrl: form.get('imageUrl'), shopeeUrl: form.get('shopeeUrl'), file: file instanceof File && file.size ? file : null
       }));
     }
+
+    const productImageMatch = route.match(/^\/products\/([^/]+)\/image$/);
+    if (productImageMatch && method === 'POST') {
+      const form = await req.formData();
+      const file = form.get('image');
+      if (!(file instanceof File) || !file.size) return json({ error: 'Envie uma imagem.' }, 400);
+      return json(await updateProductImage(productImageMatch[1], file));
+    }
+
+    const productConfirmMatch = route.match(/^\/products\/([^/]+)\/confirm$/);
+    if (productConfirmMatch && method === 'POST') return json(await confirmProduct(productConfirmMatch[1]));
 
     const productMatch = route.match(/^\/products\/([^/]+)$/);
     if (productMatch && method === 'PATCH') return json(await updateProduct(productMatch[1], await req.json()));
@@ -85,15 +106,8 @@ export default async (req, context) => {
     }
 
     if (route === '/generate' && method === 'POST') {
-      const body = await req.json(); const product = await getProduct(body.productId);
-      if (!product || !product.active) return json({ error: 'Produto não encontrado.' }, 404);
-      const message = await generateSaleCaption(product);
-      return json(await insertPost({ product, message, origin: 'manual', plannerType: 'sale' }));
-    }
-
-    if (route === '/posts' && method === 'POST') {
-      const body = await req.json(); const product = body.productId ? await getProduct(body.productId) : null;
-      return json(await insertPost({ product, displayName: body.displayName || '', message: body.message, imageUrl: body.imageUrl || '', scheduledAt: body.scheduledLocal ? localToUtc(body.scheduledLocal) : null, origin: 'manual' }));
+      const body = await req.json().catch(() => ({}));
+      return json(await generateManualSale(body.productId));
     }
 
     const postMatch = route.match(/^\/posts\/([^/]+)$/);
@@ -102,7 +116,10 @@ export default async (req, context) => {
     const pubMatch = route.match(/^\/posts\/([^/]+)\/publish$/);
     if (pubMatch && method === 'POST') return json(await publishById(pubMatch[1]));
 
-    if (route === '/planner/generate' && method === 'POST') return json(await generatePlan((await req.json().catch(() => ({}))).date));
+    if (route === '/planner/generate' && method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      return json(await generatePlan(body.date));
+    }
 
     return json({ error: `Rota não encontrada: ${method} ${route}` }, 404);
   } catch (err) {
