@@ -1,0 +1,50 @@
+name: Fix v0.7 model routing
+
+on:
+  push:
+    branches: [dev-v0.7-cost-fix]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev-v0.7-cost-fix
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Remover fallback legado para Sol nas pesquisas
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('netlify/lib/agent.mjs')
+          s=p.read_text(encoding='utf-8')
+          old="process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra'"
+          count=s.count(old)
+          if count != 3:
+              raise SystemExit(f'esperadas 3 ocorrências, encontradas {count}')
+          s=s.replace(old,"process.env.OPENAI_WEB_MODEL || 'gpt-5.6-terra'")
+          p.write_text(s,encoding='utf-8')
+          Path('.github/workflows/v07-cost-fix.yml').unlink()
+          PY
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - name: Verificar roteamento
+        run: |
+          ! grep -q "OPENAI_WEB_MODEL || process.env.OPENAI_MODEL" netlify/lib/agent.mjs
+          grep -q "OPENAI_WEB_MODEL || 'gpt-5.6-terra'" netlify/lib/agent.mjs
+      - name: Commitar correção validada
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fixa Terra como fallback econômico de web"
+          git push origin dev-v0.7-cost-fix
