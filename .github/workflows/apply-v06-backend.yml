@@ -1,0 +1,30 @@
+name: Aplicar backend v0.6
+on:
+  push:
+    branches: [dev-v0.6]
+    paths: ['.github/workflows/apply-v06-backend.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev-v0.6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python .github/scripts/upgrade-v06-backend.py
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - name: Salvar correções
+        run: |
+          rm -f .github/scripts/upgrade-v06-backend.py .github/workflows/apply-v06-backend.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Corrige backend e segurança v0.6'
+          git push origin HEAD:dev-v0.6
