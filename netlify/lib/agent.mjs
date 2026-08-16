@@ -1111,7 +1111,7 @@ export async function regeneratePostCreative(id, mode = 'template') {
   const product = current.productId ? await getProduct(current.productId) : null;
   let patch;
   if (mode === 'original') {
-    if (!product || (!product.mediaKey && !product.imageUrl)) throw new Error('Este post não possui foto original de produto disponível.');
+    if (!product || !product.mediaKey || !await mediaExists(product.mediaKey)) throw new Error('Este post não possui foto original interna disponível.');
     patch = { mediaKey: product.mediaKey || '', imageMime: product.imageMime || '', imageUrl: '', generatedVisual: false, visualMode: 'original', visualAiError: null };
   } else {
     const creative = await createCreative({ type: current.plannerType || 'growth', message: current.message, topic: current.topic, product, salt: uuid() });
@@ -1692,7 +1692,7 @@ export async function bootstrapSummary() {
       counts: { products: products.length, posts: Number(idx.totalPosts || posts.length), pending }, usage: usage || { date: today, copy: 0, web: 0, sync: 0, image: 0, failures: 0 },
       usageLimits: { copy: intEnv('AI_DAILY_COPY_LIMIT', 8), web: intEnv('AI_DAILY_WEB_LIMIT', 4), sync: intEnv('AI_DAILY_SYNC_LIMIT', 1), image: intEnv('AI_DAILY_IMAGE_LIMIT', 6) },
       models: { copy: process.env.OPENAI_COPY_MODEL || 'gpt-5.6-luna', web: process.env.OPENAI_WEB_MODEL || process.env.OPENAI_MODEL || 'gpt-5.6-terra', image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2' },
-      imageQuality: process.env.OPENAI_IMAGE_QUALITY || 'low', requireAiVisual: boolEnv('REQUIRE_AI_VISUAL', true), autoSyncShopee: boolEnv('AUTO_SYNC_SHOPEE', false), version: '0.7.0'
+      imageQuality: process.env.OPENAI_IMAGE_QUALITY || 'smart', requireAiVisual: boolEnv('REQUIRE_AI_VISUAL', true), autoSyncShopee: boolEnv('AUTO_SYNC_SHOPEE', false), version: '0.7.0'
     },
     data: { products, posts, plans, audit: auditLog?.items || [], health: decorateHealth(health || {}), settings: { timezone: TIMEZONE, plannerSlots: plannerSlots(), storage: 'Netlify Blobs', strategy: PLAN_TYPES } }
   };
