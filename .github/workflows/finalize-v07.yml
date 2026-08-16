@@ -35,6 +35,19 @@ jobs:
           PY
       - name: Aplicar hardening pós-auditoria
         run: python .github/scripts/finalize-v07.py
+      - name: Corrigir handler assíncrono da Shopee
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('public/app.js')
+          lines=p.read_text(encoding='utf-8').splitlines()
+          replacement="$('#syncShopee').addEventListener('click',async()=>{if(!confirm('Buscar candidatos reais na loja Shopee? A busca consome a cota de sincronização do dia.'))return;try{$('#syncShopee').disabled=true;toast('Pesquisando a Shopee em segundo plano…');const job=await api('/api/shopee/sync',{method:'POST'});const done=await waitForJob(job.id);const r=done.result||{};toast(`${r.found||0} encontrados · ${r.created||0} novos · ${r.updated||0} atualizados.`);await load()}catch(e){toast(e.message)}finally{$('#syncShopee').disabled=false}});"
+          matches=[i for i,line in enumerate(lines) if line.startswith("$('#syncShopee').addEventListener")]
+          if len(matches)!=1:
+              raise SystemExit(f'esperado 1 handler Shopee, encontrado {len(matches)}')
+          lines[matches[0]]=replacement
+          p.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
       - name: Instalação limpa
         run: npm ci --no-audit --no-fund
       - name: Validar sintaxe de todos os módulos
