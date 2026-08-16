@@ -21,6 +21,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Corrigir replacement literal do aplicador
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/scripts/finalize-v07.py')
+          s=p.read_text(encoding='utf-8')
+          old="out, n = re.subn(pattern, repl, text, count=1, flags=flags)"
+          new="out, n = re.subn(pattern, lambda _m: repl, text, count=1, flags=flags)"
+          if old not in s:
+              raise SystemExit('linha de sub não encontrada')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
       - name: Aplicar hardening pós-auditoria
         run: python .github/scripts/finalize-v07.py
       - name: Instalação limpa
