@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.0
+- Scheduler dividido em rotinas JIT: 10 execuções/dia em vez de 96.
+- Plano diário idempotente, retry limitado e orçamento de IA.
+- Quality Gate recalculado após edição e antes da publicação.
+- Shopee em modo descoberta + confirmação; URL canônica e determinística.
+- Venda automática exige foto real do produto.
+- Creative Engine 1080x1080, índices recentes, bootstrap único, métricas, health e audit log.
+- Meta token via Bearer e proteção de Origin/CSP.
+
 ## v0.4.0
 
 - Estratégia diária fixa: venda Shopee + hype atual + crescimento.

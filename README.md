@@ -12,7 +12,7 @@ Agente serverless para Netlify com foco em eficiência, segurança e autonomia c
 - **20:00 BRT**: publica o crescimento aprovado.
 - **03:00 BRT**: coleta performance recente para o agente aprender.
 
-Total normal: 10 Scheduled Function runs/dia, contra 96/dia na v0.4.
+Total normal: 10 Scheduled Function runs/dia, contra 96/dia na v0.4. Os horários 10h/15h/20h são fixos na v0.5 para nunca divergir dos crons do Netlify.
 
 ## Principais correções
 
@@ -21,11 +21,11 @@ Total normal: 10 Scheduled Function runs/dia, contra 96/dia na v0.4.
 - No máximo 2 tentativas de criação por slot.
 - Budget diário de IA e intervalo mínimo de sincronização Shopee.
 - Copy simples roteada para `gpt-5-mini`; web fica no modelo configurado para pesquisa.
-- Link Shopee não é escrito pela IA: o servidor acrescenta a URL canônica no momento da publicação.
+- Link Shopee não é escrito pela IA: o servidor canonicaliza (remove tracking), rejeita link da loja e acrescenta a URL exata no momento da publicação.
 - Produtos descobertos pela busca da Shopee entram **inativos e não verificados** até confirmação humana.
 - Editor completo de produto e substituição de foto.
 - Creative Engine por templates 1080×1080 com Sharp, sem inventar o produto.
-- Quality Gate com score, bloqueios de duplicação, produto inválido, hype sensível e confiança baixa.
+- Quality Gate recalculado após edição e novamente antes de publicar; bloqueia duplicação, produto inválido/sem foto real, hype sensível e confiança baixa.
 - Índice recente de posts para evitar scan completo em todo refresh.
 - Endpoint único `/api/bootstrap` para reduzir leituras duplicadas.
 - Token Meta enviado em `Authorization: Bearer`, não em query string.

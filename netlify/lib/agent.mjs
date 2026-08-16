@@ -76,10 +76,11 @@ export function isAuthenticated(req) {
   return verifySession(parseCookies(req.headers.get('cookie') || '')[SESSION_COOKIE]);
 }
 
+const FIXED_PLANNER_SLOTS = Object.freeze(['10:00', '15:00', '20:00']);
+
 export function plannerSlots() {
-  const raw = String(process.env.PLANNER_SLOTS || '10:00,15:00,20:00');
-  const slots = raw.split(',').map(s => s.trim()).filter(s => /^([01]\d|2[0-3]):[0-5]\d$/.test(s));
-  return slots.length >= 3 ? slots.slice(0, 3) : ['10:00', '15:00', '20:00'];
+  // Os crons da v0.5 são fixos nesses horários; configuração divergente criaria drift.
+  return [...FIXED_PLANNER_SLOTS];
 }
 
 function typeSpec(type) {
@@ -117,13 +118,30 @@ export function validateHttpsUrl(raw, { optional = true } = {}) {
   }
 }
 
-function validateShopeeUrl(raw) {
+export function canonicalizeShopeeUrl(raw) {
   const value = validateHttpsUrl(raw);
   if (!value) return '';
   const u = new URL(value);
   if (!/(^|\.)shopee\.com\.br$/i.test(u.hostname)) throw new Error('O link da Shopee deve ser de shopee.com.br.');
-  return value;
+  u.hash = '';
+  u.search = '';
+  u.pathname = u.pathname.replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
+  const store = new URL(SHOPEE_STORE_URL);
+  const storePath = store.pathname.replace(/\/$/, '') || '/';
+  if (u.hostname.toLowerCase() === store.hostname.toLowerCase() && (u.pathname === '/' || u.pathname.toLowerCase() === storePath.toLowerCase())) {
+    throw new Error('Use o link específico do produto, não o link da loja Shopee.');
+  }
+  return u.toString();
 }
+
+const parseBooleanInput = value => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'sim', 'on'].includes(raw)) return true;
+  if (['false', '0', 'no', 'não', 'nao', 'off', ''].includes(raw)) return false;
+  throw new Error('Valor booleano inválido.');
+};
 
 async function listJson(storeFactory, prefix) {
   const store = storeFactory();
@@ -296,7 +314,7 @@ export async function createProduct({ name, category = '', price = '', descripti
   const cleanName = String(name || '').trim();
   if (!cleanName) throw new Error('Nome do produto é obrigatório.');
   const saved = await persistSafeImage(file);
-  const link = validateShopeeUrl(shopeeUrl);
+  const link = canonicalizeShopeeUrl(shopeeUrl);
   const now = nowIso();
   const p = {
     id: uuid(), name: cleanName, category: String(category || '').trim(), price: String(price || '').trim(),
@@ -317,8 +335,8 @@ export async function updateProduct(id, body) {
     if ('price' in body) current.price = String(body.price || '').trim();
     if ('description' in body) current.description = String(body.description || '').trim();
     if ('imageUrl' in body) current.imageUrl = validateHttpsUrl(body.imageUrl);
-    if ('shopeeUrl' in body) { current.shopeeUrl = validateShopeeUrl(body.shopeeUrl); current.verified = false; current.verifiedAt = null; }
-    if ('active' in body) current.active = Boolean(body.active);
+    if ('shopeeUrl' in body) { current.shopeeUrl = canonicalizeShopeeUrl(body.shopeeUrl); current.verified = false; current.verifiedAt = null; }
+    if ('active' in body) current.active = parseBooleanInput(body.active);
     current.updatedAt = nowIso();
     return current;
   });
@@ -501,7 +519,7 @@ export async function syncShopeeCatalog({ force = false } = {}) {
   for (const item of incoming.slice(0, 30)) {
     try {
       const name = String(item.name || '').trim();
-      const url = validateShopeeUrl(item.url);
+      const url = canonicalizeShopeeUrl(item.url);
       const confidence = Math.max(0, Math.min(1, Number(item.confidence ?? 0)));
       if (!name || !url || confidence < 0.55) { ignored++; continue; }
       const old = byUrl.get(url);
@@ -622,7 +640,7 @@ async function qualityGate(post, product = null) {
     if (product && !product.active) blockers.push('produto inativo');
     if (product && !product.verified) blockers.push('produto ainda não confirmado');
     if (!post.shopeeUrl || post.shopeeUrl !== product?.shopeeUrl) blockers.push('link Shopee não confere com o produto atual');
-    if (!product?.mediaKey && !product?.imageUrl) { score -= 10; warnings.push('produto sem foto real cadastrada'); }
+    if (!product?.mediaKey && !product?.imageUrl) blockers.push('produto sem foto real cadastrada');
   }
   if (post.plannerType === 'hype') {
     if (Number(post.hypeConfidence ?? 0) < 0.65) blockers.push('confiança insuficiente no hype');
@@ -679,22 +697,40 @@ export async function generateManualSale(productId) {
 }
 
 export async function patchPost(id, body) {
-  const updated = await casPost(id, current => {
-    if (['publishing', 'published'].includes(current.status)) { const e = new Error('Post em publicação ou já publicado não pode ser editado.'); e.status = 409; throw e; }
-    if ('message' in body) { const m = String(body.message || '').trim(); if (!m) throw new Error('Legenda não pode ficar vazia.'); current.message = m; }
+  const updated = await casPost(id, async current => {
+    if (['publishing', 'published'].includes(current.status)) {
+      const e = new Error('Post em publicação ou já publicado não pode ser editado.'); e.status = 409; throw e;
+    }
+    const contentChanged = 'message' in body || 'imageUrl' in body;
+    if ('message' in body) {
+      const m = String(body.message || '').trim();
+      if (!m) throw new Error('Legenda não pode ficar vazia.');
+      current.message = m;
+    }
     if ('scheduledLocal' in body) current.scheduledAt = body.scheduledLocal ? localToUtc(body.scheduledLocal) : null;
     if ('imageUrl' in body) current.imageUrl = validateHttpsUrl(body.imageUrl);
-    if ('status' in body) {
-      if (!['draft', 'approved', 'cancelled'].includes(body.status)) throw new Error('Status inválido.');
-      if (body.status === 'approved' && current.quality?.blockers?.length) throw new Error(`Quality Gate bloqueou: ${current.quality.blockers.join('; ')}`);
-      current.status = body.status; current.error = null; current.errorCode = null; current.errorSubcode = null;
+    if (contentChanged && current.status === 'approved' && !('status' in body)) current.status = 'draft';
+    const requestedStatus = 'status' in body ? body.status : null;
+    if (requestedStatus && !['draft', 'approved', 'cancelled'].includes(requestedStatus)) throw new Error('Status inválido.');
+    const product = current.productId ? await getProduct(current.productId) : null;
+    current.quality = await qualityGate(current, product);
+    if (requestedStatus === 'approved') {
+      if (current.quality.blockers.length) throw new Error(`Quality Gate bloqueou: ${current.quality.blockers.join('; ')}`);
+      current.status = 'approved';
+      current.error = null; current.errorCode = null; current.errorSubcode = null;
+    } else if (requestedStatus) {
+      current.status = requestedStatus;
+      current.error = null; current.errorCode = null; current.errorSubcode = null;
     }
     current.updatedAt = nowIso();
     return current;
   });
-  if (updated.dailyDate && updated.plannerType && body.status === 'cancelled') await markPlanSlot(updated.dailyDate, updated.plannerType, { state: 'cancelled', postId: updated.id });
+  if (updated.dailyDate && updated.plannerType && body.status === 'cancelled') {
+    await markPlanSlot(updated.dailyDate, updated.plannerType, { state: 'cancelled', postId: updated.id });
+  }
   return updated;
 }
+
 
 export async function chooseSaleProduct() {
   const products = (await listProducts()).filter(p => p.active && p.verified && p.shopeeUrl);
@@ -800,9 +836,10 @@ export async function generatePlan(dateRaw) {
 
 async function validateBeforePublish(post) {
   if (!post) throw new Error('Post não encontrado.');
-  if (post.quality?.blockers?.length) throw new Error(`Quality Gate bloqueou: ${post.quality.blockers.join('; ')}`);
+  const product = post.productId ? await getProduct(post.productId) : null;
+  const freshQuality = await qualityGate(post, product);
+  if (freshQuality.blockers.length) throw new Error(`Quality Gate bloqueou: ${freshQuality.blockers.join('; ')}`);
   if (post.plannerType === 'sale') {
-    const product = await getProduct(post.productId);
     if (!product || !product.active || !product.verified) throw new Error('Produto da venda está inativo, ausente ou não confirmado.');
     if (product.shopeeUrl !== post.shopeeUrl) throw new Error('O link atual do produto mudou; revise o post antes de publicar.');
   }
